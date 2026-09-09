@@ -1,0 +1,235 @@
+import { useEffect, useRef, useState } from "react";
+import { Terminal as Xterm } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
+import type { TerminalView } from "../shared/types";
+export function Terminal({
+  terminal,
+  report,
+}: {
+  terminal: TerminalView;
+  report: (error: unknown) => void;
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  const [connected, setConnected] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!host.current || terminal.status === "missing") return;
+    setConnectionError("");
+    let disposed = false;
+    let token = "";
+    let pending: [string, string][] = [];
+    const earlyExits = new Set<string>();
+    let receivedOutput = false;
+    let inputQueue = Promise.resolve();
+    let queuedInput = 0;
+    const term = new Xterm({
+      cursorBlink: true,
+      fontFamily: '"DejaVu Sans Mono", "Cascadia Code", monospace',
+      fontSize: 13,
+      lineHeight: 1.25,
+      scrollback: 10000,
+      allowProposedApi: false,
+      theme: {
+        background: "#111314",
+        foreground: "#d8ded9",
+        cursor: "#c5edaa",
+        selectionBackground: "#334a37",
+        black: "#242827",
+        red: "#f18d89",
+        green: "#b3d797",
+        yellow: "#e1c785",
+        blue: "#90badd",
+        magenta: "#c1a4d8",
+        cyan: "#95d3cc",
+        white: "#e0e5df",
+      },
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(host.current);
+    fit.fit();
+    const write = (data: string) => {
+      if (!receivedOutput) {
+        receivedOutput = true;
+        setConnected(true);
+      }
+      term.write(data, () => window.minimal.acknowledge(token, data.length));
+    };
+    const offOutput = window.minimal.onOutput((incoming, data) => {
+      if (!token) pending.push([incoming, data]);
+      else if (incoming === token) write(data);
+    });
+    const offExit = window.minimal.onExit((incoming) => {
+      if (!token) earlyExits.add(incoming);
+      else if (incoming === token) {
+        setConnected(false);
+        setConnectionError(
+          "Terminal connection ended. Reconnect to view surviving work.",
+        );
+      }
+    });
+    const onData = term.onData((data) => {
+      if (!token || disposed) return;
+      if (queuedInput + data.length > 2 * 1024 * 1024) {
+        report(
+          new Error(
+            "Paste is too large or input is busy. Wait, then paste a smaller selection.",
+          ),
+        );
+        return;
+      }
+      queuedInput += data.length;
+      inputQueue = inputQueue
+        .then(async () => {
+          for (let offset = 0; offset < data.length;) {
+            if (disposed) return;
+            let end = Math.min(offset + 16384, data.length);
+            if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1]))
+              end--;
+            await window.minimal.input(token, data.slice(offset, end));
+            offset = end;
+          }
+        })
+        .catch((error) => {
+          if (!disposed) report(error);
+        })
+        .finally(() => {
+          queuedInput -= data.length;
+        });
+    });
+    const copy = () =>
+      window.minimal.writeClipboard(term.getSelection()).catch(report);
+    const pasteText = () =>
+      window.minimal
+        .readClipboard()
+        .then((text) => {
+          if (!disposed) term.paste(text);
+        })
+        .catch(report);
+    term.attachCustomKeyEventHandler((event) => {
+      if (
+        event.ctrlKey &&
+        event.shiftKey &&
+        ["c", "v"].includes(event.key.toLowerCase())
+      ) {
+        if (event.type === "keydown") {
+          if (event.key.toLowerCase() === "c") {
+            if (term.hasSelection()) void copy();
+          } else void pasteText();
+        }
+        event.preventDefault();
+        return false;
+      }
+      return true;
+    });
+    let resizeFrame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        if (!disposed) {
+          fit.fit();
+          if (token) window.minimal.resize(token, term.cols, term.rows);
+        }
+      });
+    });
+    observer.observe(host.current);
+    window.minimal
+      .attach(terminal.id, term.cols, term.rows)
+      .then((result) => {
+        if (disposed) {
+          void window.minimal.detach(result);
+          return;
+        }
+        token = result;
+        for (const [incoming, data] of pending)
+          if (incoming === token) write(data);
+        pending = [];
+        if (earlyExits.has(token)) {
+          setConnected(false);
+          setConnectionError(
+            "Could not attach to this terminal. Reconnect to try again.",
+          );
+        }
+        term.focus();
+      })
+      .catch((error) => {
+        if (!disposed)
+          setConnectionError(
+            error instanceof Error ? error.message : String(error),
+          );
+      });
+    const element = host.current;
+    const paste = async (event: MouseEvent) => {
+      event.preventDefault();
+      if (term.hasSelection()) await copy();
+      else await pasteText();
+    };
+    element.addEventListener("contextmenu", paste);
+    return () => {
+      disposed = true;
+      setConnected(false);
+      observer.disconnect();
+      cancelAnimationFrame(resizeFrame);
+      offOutput();
+      offExit();
+      onData.dispose();
+      element.removeEventListener("contextmenu", paste);
+      if (token) void window.minimal.detach(token);
+      term.dispose();
+    };
+  }, [terminal.id, terminal.status === "missing", attempt]);
+  return (
+    <div className="terminal-wrap">
+      <div
+        className="terminal-surface"
+        ref={host}
+        data-testid="terminal-surface"
+      />
+      {terminal.status === "missing" && (
+        <div className="terminal-message">
+          <h2>
+            {terminal.launchError
+              ? "Could not start this terminal"
+              : "Work is no longer running"}
+          </h2>
+          <p>
+            {terminal.launchError ||
+              "This terminal was not found in tmux. It has been kept here for reference."}
+          </p>
+          <p>
+            Use <strong>Edit &amp; run</strong> to review its command and launch
+            again.
+          </p>
+        </div>
+      )}
+      {connectionError && terminal.status !== "missing" && (
+        <div className="terminal-reconnect" role="status">
+          <span>{connectionError}</span>
+          <button
+            className="secondary"
+            onClick={() => setAttempt((value) => value + 1)}
+          >
+            Reconnect
+          </button>
+        </div>
+      )}
+      <div className="terminal-caption">
+        <span className={`dot ${connected ? "live" : ""}`} />
+        {terminal.status === "exited"
+          ? `Process exited · code ${terminal.exitCode ?? "unknown"}`
+          : connected
+            ? "Connected"
+            : terminal.status === "missing"
+              ? "Unavailable"
+              : connectionError
+                ? "Disconnected"
+                : "Connecting…"}
+        <span className="caption-right">
+          {terminal.pid ? `PID ${terminal.pid}` : ""} · bash / tmux
+        </span>
+      </div>
+    </div>
+  );
+}

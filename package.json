@@ -1,0 +1,42 @@
+{
+  "name": "minimal",
+  "version": "1.1.0",
+  "main": "dist/main/index.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs && vite build",
+    "typecheck": "tsc --noEmit",
+    "start": "npm run build && electron .",
+    "start:built": "electron .",
+    "test": "tsx --test tests/core.test.ts",
+    "test:desktop": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "package": "npm run build && node scripts/package.mjs",
+    "test:package": "tsx tests/package-smoke.ts"
+  },
+  "license": "ISC",
+  "description": "A local desktop workspace for persistent sessions, terminals, and scoped files.",
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "lucide-react": "^1.43.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.5.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "electron": "^44.2.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "type": "module"
+}
