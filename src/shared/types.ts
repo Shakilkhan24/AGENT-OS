@@ -1,3 +1,6 @@
+import type { FileAction, FileResults } from "./files";
+import type { Draft, DraftInput, DraftSummary } from "./drafts";
+import type { Settings } from "./settings";
 import type { EnvProfile } from "./env-profiles";
 import type { Hook } from "./hooks";
 import type { LaunchRecord, SessionMetadata } from "./models";
@@ -87,25 +90,13 @@ export interface Snapshot {
   hooks?: Hook[];
   launches?: LaunchRecord[];
 }
-export interface FileEntry {
-  name: string;
-  kind: "directory" | "file" | "blocked";
-  size: number;
-}
-export interface FilePreview {
-  kind: "text" | "image" | "binary";
-  content: string;
-  size: number;
-}
-export type FileAction =
-  | { action: "list"; path: string }
-  | { action: "read"; path: string }
-  | { action: "preview"; path: string }
-  | { action: "write"; path: string; content: string }
-  | { action: "create"; path: string; kind: "file" | "directory" }
-  | { action: "move"; path: string; destination: string }
-  | { action: "delete"; path: string };
+export type { FileEntry, FilePreview, FileAction } from "./files";
 export interface API {
+  getSettings(): Promise<Settings>;
+  listDrafts(): Promise<DraftSummary[]>;
+  readDraft(id: string): Promise<Draft>;
+  saveDraft(input: DraftInput): Promise<DraftSummary>;
+  removeDraft(id: string): Promise<void>;
   snapshot(): Promise<Snapshot>;
   chooseDirectory(): Promise<string | null>;
   createSession(name: string, directory: string): Promise<Snapshot>;
@@ -128,7 +119,7 @@ export interface API {
   ): Promise<Snapshot>;
   deleteTerminal(sessionId: string, terminalId: string): Promise<Snapshot>;
   savePresets(presets: Preset[]): Promise<Snapshot>;
-  files(sessionId: string, request: FileAction): Promise<any>;
+  files<A extends FileAction>(sessionId: string, request: A): Promise<FileResults[A["action"]]>;
   attach(terminalId: string, cols: number, rows: number): Promise<string>;
   detach(token: string): Promise<void>;
   input(token: string, data: string): Promise<void>;

@@ -119,7 +119,7 @@ export class SessionService {
   private unique(items: { id: string }[]) {
     if (new Set(items.map(item => item.id)).size !== items.length) throw new AppError("INVALID_REQUEST", "Record IDs must be unique");
   }
-  files(sessionId: string, request: FileAction) { return this.filesystem.run(this.state.session(sessionId), request); }
+  files<A extends FileAction>(sessionId: string, request: A) { return this.filesystem.run(this.state.session(sessionId), request); }
   async requireTerminal(id: string) {
     const terminal = this.state.read().sessions.filter(s => !s.deleting).flatMap(s => s.terminals).find(t => t.id === id && !t.deleting);
     if (!terminal) throw new AppError("NOT_FOUND", "Terminal no longer exists");

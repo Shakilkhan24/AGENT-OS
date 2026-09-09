@@ -1,9 +1,46 @@
 import { test, expect, _electron as electron } from "@playwright/test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { TmuxEngine } from "../src/main/engine";
+test("file conflicts, recovery drafts and virtual directory rows work across restart", async () => {
+  const base = await mkdtemp(path.join(tmpdir(), "minimal-recovery-ui-"));
+  const root = path.join(base, "project"), data = path.join(base, "profile");
+  await mkdir(root);
+  await writeFile(path.join(root, "notes.txt"), "original");
+  const launch = () => electron.launch({ executablePath: process.env.MINIMAL_ELECTRON_PATH, args: ["."], env: { ...process.env, MINIMAL_DATA_DIR: data } });
+  let app = await launch();
+  try {
+    let page = await app.firstWindow();
+    await page.evaluate(directory => window.minimal.createSession("Recovery project", directory), root);
+    await page.getByRole("option", { name: "notes.txt", exact: true }).dblclick();
+    await page.getByRole("textbox", { name: "File contents" }).fill("my unsaved work");
+    await expect.poll(async () => (await readdir(path.join(data, "drafts"))).filter(name => name.endsWith(".json")).length).toBe(1);
+    await writeFile(path.join(root, "notes.txt"), "external version");
+    await page.getByRole("button", { name: "Save file", exact: true }).click();
+    await expect(page.getByLabel("Current disk contents")).toHaveText("external version");
+    expect(await readFile(path.join(root, "notes.txt"), "utf8")).toBe("external version");
+    await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("button", { name: "Keep draft and close", exact: true }).click();
+    await app.close(); app = await launch(); page = await app.firstWindow();
+    await page.getByRole("button", { name: "1 recovery draft", exact: true }).click();
+    await page.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "File contents" })).toHaveValue("my unsaved work");
+    await page.getByRole("button", { name: "Save file", exact: true }).click();
+    await page.getByRole("button", { name: "Replace reviewed version", exact: true }).click();
+    await expect(page.getByText("Saved · UTF-8")).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await Promise.all(Array.from({ length: 550 }, (_, index) => writeFile(path.join(root, `entry-${index}`), "")));
+    await page.getByRole("button", { name: "Refresh files" }).click();
+    await expect(page.locator(".file-footer")).toContainText("200 items");
+    expect(await page.locator(".file-row").count()).toBeLessThan(50);
+    await page.getByRole("listbox", { name: "Files" }).evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await expect.poll(async () => (await page.locator(".file-footer").innerText()).includes("200 items")).toBe(false);
+    expect(await page.locator(".file-row").count()).toBeLessThan(50);
+  } finally { await app.close().catch(() => {}); await rm(base, { recursive: true, force: true }); }
+});
 test("desktop workflows, real terminal input, file editing, and closing/reopening", async () => {
   const base = await mkdtemp(path.join(tmpdir(), "minimal-desktop-"));
   const root = path.join(base, "project");
@@ -64,7 +101,7 @@ test("desktop workflows, real terminal input, file editing, and closing/reopenin
       .fill("notes.txt");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await page
-      .getByRole("button", { name: "notes.txt", exact: true })
+      .getByRole("option", { name: "notes.txt", exact: true })
       .dblclick();
     await page
       .getByRole("textbox", { name: "File contents" })
@@ -85,12 +122,12 @@ test("desktop workflows, real terminal input, file editing, and closing/reopenin
     );
     await page.getByRole("button", { name: "Refresh files" }).click();
     await page
-      .getByRole("button", { name: "binary.dat", exact: true })
+      .getByRole("option", { name: "binary.dat", exact: true })
       .dblclick();
     await expect(page.getByLabel("File bytes")).toContainText("00 ff 7f");
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await page
-      .getByRole("button", { name: "image.png", exact: true })
+      .getByRole("option", { name: "image.png", exact: true })
       .dblclick();
     await expect(page.getByRole("img", { name: "image.png" })).toBeVisible();
     await expect
@@ -452,34 +489,34 @@ test("configurable workflows, independent sessions, rename/remove controls and r
       .click();
     await expect(page.getByRole("tab")).toHaveCount(2);
     // File toolbar operations are routed through the same scoped provider.
-    await page.getByRole("button", { name: "workers", exact: true }).click();
+    await page.getByRole("option", { name: "workers", exact: true }).click();
     await page.getByRole("button", { name: "Rename selected" }).click();
     await page.getByRole("textbox", { name: "Name", exact: true }).fill("jobs");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "jobs", exact: true }),
+      page.getByRole("option", { name: "jobs", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "New folder", exact: true }).click();
     await page
       .getByRole("textbox", { name: "Name", exact: true })
       .fill("archive");
     await page.getByRole("button", { name: "Save", exact: true }).click();
-    await page.getByRole("button", { name: "jobs", exact: true }).click();
+    await page.getByRole("option", { name: "jobs", exact: true }).click();
     await page.getByRole("button", { name: "Move selected" }).click();
     await page
       .getByRole("textbox", { name: "Destination path from session root" })
       .fill("archive/jobs");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "jobs", exact: true }),
+      page.getByRole("option", { name: "jobs", exact: true }),
     ).toHaveCount(0);
-    await page.getByRole("button", { name: "archive", exact: true }).click();
+    await page.getByRole("option", { name: "archive", exact: true }).click();
     await page.getByRole("button", { name: "Delete selected" }).click();
     await page
       .getByRole("button", { name: "Delete permanently", exact: true })
       .click();
     await expect(
-      page.getByRole("button", { name: "archive", exact: true }),
+      page.getByRole("option", { name: "archive", exact: true }),
     ).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {

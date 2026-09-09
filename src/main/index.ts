@@ -9,12 +9,14 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { fileActionSchema } from "../shared/files";
 import { Store } from "./store";
 import { TmuxEngine, type Attachment } from "./engine";
 import { SessionFilesystem } from "./filesystem";
 import { SessionService } from "./service";
 import { Logger, configureLogging, log } from "./logging";
 import { SettingsStore } from "./settings-store";
+import { DraftStore } from "./draft-store";
 
 if (process.env.MINIMAL_DATA_DIR)
   app.setPath("userData", path.resolve(process.env.MINIMAL_DATA_DIR));
@@ -43,6 +45,7 @@ else {
       const directory = app.getPath("userData");
       configureLogging(new Logger(path.join(directory, "logs")));
       const settings = await new SettingsStore(directory).load();
+      const drafts = new DraftStore(directory, settings.draftLimit);
       configureLogging(
         new Logger(path.join(directory, "logs"), settings.logRetentionDays),
       );
@@ -54,6 +57,7 @@ else {
       });
       filesystem = new SessionFilesystem(
         path.join(__dirname, "../helpers/filesystem.py"),
+        settings,
       );
       const engine = new TmuxEngine(
         directory,
@@ -95,6 +99,14 @@ else {
           return callback(...args);
         });
       handle("snapshot", () => service.snapshot());
+      handle("get-settings", () => settings);
+      handle("list-drafts", () => drafts.list());
+      handle("read-draft", draftId => drafts.read(draftId));
+      handle("save-draft", input => {
+        service.state.session(input.sessionId);
+        return drafts.save(input);
+      });
+      handle("remove-draft", draftId => drafts.remove(draftId));
       handle("read-clipboard", () => clipboard.readText());
       handle("write-clipboard", (text) =>
         clipboard.writeText(
@@ -142,33 +154,8 @@ else {
         service.deleteTerminal(id.parse(sessionId), id.parse(terminalId)),
       );
       handle("save-presets", (presets) => service.savePresets(presets));
-      const filePath = z
-        .string()
-        .max(4096)
-        .refine((p) => !p.includes("\0"));
-      const fileRequest = z.discriminatedUnion("action", [
-        z.object({ action: z.literal("list"), path: filePath }),
-        z.object({ action: z.literal("read"), path: filePath }),
-        z.object({ action: z.literal("preview"), path: filePath }),
-        z.object({
-          action: z.literal("write"),
-          path: filePath,
-          content: z.string().max(2 * 1024 * 1024),
-        }),
-        z.object({
-          action: z.literal("create"),
-          path: filePath,
-          kind: z.enum(["file", "directory"]),
-        }),
-        z.object({
-          action: z.literal("move"),
-          path: filePath,
-          destination: filePath,
-        }),
-        z.object({ action: z.literal("delete"), path: filePath }),
-      ]);
       handle("files", (sessionId, request) =>
-        service.files(id.parse(sessionId), fileRequest.parse(request)),
+        service.files(id.parse(sessionId), fileActionSchema.parse(request)),
       );
       handle("attach", async (terminalId, cols, rows) => {
         const generation = ++attachmentGeneration;
@@ -276,7 +263,7 @@ else {
     });
 }
 app.on("window-all-closed", () => app.quit());
-app.on("before-quit", () => {
+app.on("will-quit", () => {
   workspace?.close();
   detach();
   filesystem?.close();

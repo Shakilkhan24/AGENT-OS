@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { API } from "../shared/types";
 const api: API = {
+  getSettings: () => ipcRenderer.invoke("get-settings"),
+  listDrafts: () => ipcRenderer.invoke("list-drafts"),
+  readDraft: id => ipcRenderer.invoke("read-draft", id),
+  saveDraft: input => ipcRenderer.invoke("save-draft", input),
+  removeDraft: id => ipcRenderer.invoke("remove-draft", id),
   snapshot: () => ipcRenderer.invoke("snapshot"),
   chooseDirectory: () => ipcRenderer.invoke("choose-directory"),
   createSession: (name, directory) =>

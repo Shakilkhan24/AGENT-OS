@@ -170,7 +170,10 @@ test("filesystem CRUD and containment reject traversal, links, special files and
   const f = await fixture();
   t.after(f.cleanup);
   const session = (await f.service.createSession("Files", f.root)).sessions[0];
-  const run = (request: any) => f.service.files(session.id, request);
+  const run = async (request: any) => {
+    if (request.action === "write") request.expectedHash = (await f.service.files(session.id, { action: "preview", path: request.path })).hash;
+    return f.service.files(session.id, request);
+  };
   await writeFile(path.join(f.base, "outside"), "DO NOT CHANGE");
   await run({ action: "create", path: "folder", kind: "directory" });
   await run({ action: "create", path: "hello.txt", kind: "file" });
@@ -352,7 +355,10 @@ test("file operations work on the actual workspace filesystem, including WSL Win
   t.after(f.cleanup);
   const session = (await f.service.createSession("Mounted project", root))
     .sessions[0];
-  const run = (request: any) => f.service.files(session.id, request);
+  const run = async (request: any) => {
+    if (request.action === "write") request.expectedHash = (await f.service.files(session.id, { action: "preview", path: request.path })).hash;
+    return f.service.files(session.id, request);
+  };
   await run({ action: "create", path: "example.txt", kind: "file" });
   await run({
     action: "write",
