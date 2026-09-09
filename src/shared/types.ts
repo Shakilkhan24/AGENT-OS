@@ -1,3 +1,7 @@
+import type { EnvProfile } from "./env-profiles";
+import type { Hook } from "./hooks";
+import type { LaunchRecord, SessionMetadata } from "./models";
+export type { EnvProfile, Hook, SessionMetadata };
 export interface Preset {
   id: string;
   name: string;
@@ -10,6 +14,12 @@ export interface LaunchRequest {
   count?: number;
   cwd?: string;
   savePresetAs?: string;
+  idempotencyKey?: string;
+  envProfileId?: string;
+  env?: Record<string, string>;
+  promptAnchors?: string[];
+  metadata?: Record<string, string>;
+  originHookId?: string;
 }
 export interface LaunchResult extends Snapshot {
   terminalIds: string[];
@@ -23,6 +33,16 @@ export interface TerminalRecord {
   createdAt: string;
   deleting?: boolean;
   launchError?: string;
+  startedAt?: string;
+  endedAt?: string;
+  exitCode?: number;
+  exitSignal?: string;
+  metadata?: Record<string, string>;
+  env?: Record<string, string>;
+  envProfileId?: string;
+  promptAnchors?: string[];
+  launchState?: "starting" | "running" | "cancelled" | "failed";
+  originHookId?: string;
 }
 export interface SessionRecord {
   id: string;
@@ -32,11 +52,15 @@ export interface SessionRecord {
   createdAt: string;
   terminals: TerminalRecord[];
   deleting?: boolean;
+  metadata?: SessionMetadata;
 }
 export interface State {
-  version: 1;
+  version: 2;
   sessions: SessionRecord[];
   presets: Preset[];
+  envProfiles: EnvProfile[];
+  hooks: Hook[];
+  launches: LaunchRecord[];
 }
 export interface TerminalView extends TerminalRecord {
   status: "running" | "exited" | "missing" | "deleting" | "unknown";
