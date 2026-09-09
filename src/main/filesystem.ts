@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { FileAction, SessionRecord } from "../shared/types";
+import { log } from "./logging";
 export class SessionFilesystem {
   private child?: ChildProcessWithoutNullStreams;
   private sequence = 0;
@@ -34,7 +35,12 @@ export class SessionFilesystem {
       ),
     );
     child.stderr.on("data", (data) =>
-      console.error("File service:", data.toString()),
+      log({
+        level: "warning",
+        source: "file-worker",
+        event: "stderr",
+        fields: { bytes: data.length },
+      }),
     );
     createInterface({ input: child.stdout }).on("line", (line) => {
       if (this.child !== child) return;

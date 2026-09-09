@@ -10,6 +10,7 @@ import { createInterface } from "node:readline";
 import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 import type { TerminalRecord } from "../shared/types";
+import { log } from "./logging";
 const exec = promisify(execFile);
 export interface ProcessInfo {
   id: string;
@@ -218,7 +219,12 @@ export class TmuxEngine implements TerminalEngine {
       }
     });
     child.stderr.on("data", (data) =>
-      console.error("Terminal client:", data.toString()),
+      log({
+        level: "warning",
+        source: "terminal-client",
+        event: "stderr",
+        fields: { bytes: data.length },
+      }),
     );
     const ended = () => {
       clearTimeout(closeTimer);

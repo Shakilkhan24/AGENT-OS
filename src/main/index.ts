@@ -13,6 +13,8 @@ import { Store } from "./store";
 import { TmuxEngine, type Attachment } from "./engine";
 import { SessionFilesystem } from "./filesystem";
 import { SessionService } from "./service";
+import { Logger, configureLogging, log } from "./logging";
+import { SettingsStore } from "./settings-store";
 
 if (process.env.MINIMAL_DATA_DIR)
   app.setPath("userData", path.resolve(process.env.MINIMAL_DATA_DIR));
@@ -38,6 +40,17 @@ else {
       const location = path.join(__dirname, "../renderer/index.html");
       const rendererUrl = pathToFileURL(location).href;
       const directory = app.getPath("userData");
+      configureLogging(new Logger(path.join(directory, "logs")));
+      const settings = await new SettingsStore(directory).load();
+      configureLogging(
+        new Logger(path.join(directory, "logs"), settings.logRetentionDays),
+      );
+      log({
+        level: "info",
+        source: "application",
+        event: "started",
+        fields: { version: app.getVersion() },
+      });
       filesystem = new SessionFilesystem(
         path.join(__dirname, "../helpers/filesystem.py"),
       );
@@ -203,7 +216,15 @@ else {
                   .parse(first),
               );
           } catch (error) {
-            console.error("Rejected terminal message:", error);
+            log({
+              level: "warning",
+              source: "ipc",
+              event: "message-rejected",
+              fields: {
+                channel,
+                kind: error instanceof Error ? error.name : "unknown",
+              },
+            });
           }
         });
       window = new BrowserWindow({
@@ -236,7 +257,12 @@ else {
       await window.loadFile(location);
     })
     .catch((error) => {
-      console.error(error);
+      log({
+        level: "error",
+        source: "application",
+        event: "startup-failed",
+        fields: { kind: error instanceof Error ? error.name : "unknown" },
+      });
       dialog.showErrorBox(
         "MINIMAL could not start",
         String(error.message || error),

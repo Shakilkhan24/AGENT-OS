@@ -1,0 +1,20 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { SettingsStore } from "../src/main/settings-store";
+test("settings supply bounded defaults, persist changes and preserve invalid files", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "minimal-settings-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SettingsStore(root);
+  const defaults = await store.load();
+  assert.equal(defaults.fileWatching, false);
+  await store.save({ ...defaults, pollIntervalMs: 500 });
+  assert.equal((await store.load()).pollIntervalMs, 500);
+  await assert.rejects(store.save({ ...defaults, inputBudgetBytes: Infinity }));
+  await assert.rejects(store.save({ ...defaults, unknown: true }));
+  await writeFile(store.file, "{broken");
+  await assert.rejects(store.load());
+  assert.equal(await readFile(store.file, "utf8"), "{broken");
+});
