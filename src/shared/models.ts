@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { environmentSchema, envProfileSchema } from "./env-profiles";
 import { hookSchema } from "./hooks";
+import { stopPolicySchema } from "./events";
 export const nameSchema = z.string().trim().min(1).max(80);
 export const commandSchema = z
   .string()
@@ -33,6 +34,7 @@ export const terminalSchema = z.object({
   command: commandSchema,
   createdAt: z.string(),
   deleting: z.boolean().optional(),
+  deletionPolicy: stopPolicySchema.optional(),
   launchError: z.string().optional(),
   startedAt: z.string().datetime().optional(),
   endedAt: z.string().datetime().optional(),
@@ -55,6 +57,7 @@ export const sessionSchema = z.object({
   createdAt: z.string(),
   terminals: z.array(terminalSchema),
   deleting: z.boolean().optional(),
+  deletionPolicy: stopPolicySchema.optional(),
   metadata: sessionMetadataSchema.optional(),
 });
 export const launchRecordSchema = z.object({

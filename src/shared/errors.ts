@@ -42,7 +42,7 @@ export class AppError extends Error {
 export function asFailure(
   error: unknown,
   sourceId = "application",
-  correlationId = crypto.randomUUID(),
+  correlationId: string = crypto.randomUUID(),
 ): Failure {
   if (error instanceof AppError)
     return { ...error.failure, sourceId, correlationId };

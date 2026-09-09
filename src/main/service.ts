@@ -1,319 +1,129 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { nameSchema, presetSchema, Store } from "./store";
-import type { TerminalEngine } from "./engine";
+import { nameSchema, presetSchema, sessionMetadataSchema } from "../shared/models";
+import { envProfileSchema } from "../shared/env-profiles";
+import { hookSchema } from "../shared/hooks";
+import { defaultSettings, type Settings } from "../shared/settings";
+import { AppError, asFailure } from "../shared/errors";
+import { stopPolicySchema, type StopPolicy } from "../shared/events";
+import type { EngineAdapter } from "../shared/engine";
+import type { FileAction, Preset, LaunchRequest, LaunchResult, SessionMetadata, EnvProfile, Hook } from "../shared/types";
+import { Store } from "./store";
 import { SessionFilesystem } from "./filesystem";
-import { commandLabel } from "../shared/commands";
-import type {
-  FileAction,
-  Preset,
-  SessionRecord,
-  Snapshot,
-  State,
-  LaunchRequest,
-  LaunchResult,
-  TerminalRecord,
-} from "../shared/types";
-const launchSchema = z
-  .object({
-    command: z
-      .string()
-      .max(8192)
-      .refine((s) => !s.includes("\0"))
-      .optional(),
-    presetId: z.string().uuid().optional(),
-    label: z.string().trim().max(70).optional(),
-    count: z.number().int().min(1).max(32).default(1),
-    cwd: z.string().max(4096).default(""),
-    savePresetAs: nameSchema.optional(),
-  })
-  .refine(
-    (value) => value.command !== undefined || value.presetId !== undefined,
-    "Enter a command or choose a preset",
-  );
+import { WorkspaceState, findSession, findTerminal } from "./workspace-state";
+import { EventBus } from "./event-bus";
+import { Reconciler } from "./reconciler";
+import { LaunchCoordinator } from "./launch-coordinator";
+import { StopCoordinator } from "./stop-coordinator";
+import { log } from "./logging";
+
+/** Public application facade; focused services own persistence, launch and engine observation. */
 export class SessionService {
-  private state!: State;
-  private queue: Promise<unknown> = Promise.resolve();
-  private sequence = 0;
-  constructor(
-    private store: Store,
-    readonly engine: TerminalEngine,
-    readonly filesystem: SessionFilesystem,
-  ) {}
+  readonly state: WorkspaceState;
+  readonly events: EventBus;
+  readonly reconciliation: Reconciler;
+  readonly launches: LaunchCoordinator;
+  private stops: StopCoordinator;
+  private timer?: ReturnType<typeof setInterval>;
+  private unsubscribe?: () => void;
+  constructor(store: Store, readonly engine: EngineAdapter, readonly filesystem: SessionFilesystem,
+    private settings: Settings = defaultSettings) {
+    this.state = new WorkspaceState(store);
+    this.events = new EventBus(store.directory, settings.eventReplayLimit);
+    this.reconciliation = new Reconciler(this.state, engine, this.events);
+    const changed = () => this.reconciliation.invalidate();
+    this.launches = new LaunchCoordinator(this.state, engine, filesystem, this.events, changed);
+    this.stops = new StopCoordinator(this.state, engine, this.events, filesystem, this.launches, changed);
+  }
   async initialize() {
-    this.state = await this.store.load();
+    await this.state.initialize();
+    await this.events.initialize();
     await this.engine.initialize();
-    await this.reconcile();
+    await this.launches.recover();
+    await this.stops.recover();
   }
-  private serial<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(operation);
-    this.queue = result.catch(() => {});
-    return result;
+  start() {
+    if (this.timer) return;
+    const refresh = () => { void this.snapshot().catch(error => {
+      log({ level: "error", source: "reconciliation", event: "refresh-failed", fields: { code: asFailure(error).code } });
+    }); };
+    this.unsubscribe = this.engine.onChange?.(refresh);
+    this.timer = setInterval(refresh, this.settings.pollIntervalMs); this.timer.unref();
+    refresh();
   }
-  private session(id: string): SessionRecord {
-    const session = this.state.sessions.find(
-      (item) => item.id === id && !item.deleting,
-    );
-    if (!session) throw new Error("Session no longer exists");
-    return session;
+  close() {
+    clearInterval(this.timer); this.timer = undefined;
+    this.unsubscribe?.(); this.engine.close?.(); this.launches.close();
   }
-  private async persist(next: State) {
-    await this.store.save(next);
-    this.state = next;
+  snapshot() { return this.reconciliation.snapshot(); }
+  async createSession(name: string, directory: string) {
+    name = nameSchema.parse(name); directory = z.string().min(1).max(4096).parse(directory);
+    const id = randomUUID();
+    const binding = await this.filesystem.register(id, directory);
+    try { await this.state.update(state => {
+      state.sessions.push({ id, name, ...binding, createdAt: new Date().toISOString(), terminals: [], metadata: sessionMetadataSchema.parse({}) });
+    }); } catch (error) { await this.filesystem.unregister(id); throw error; }
+    await this.events.publish({ type: "session-changed", sourceId: "sessions", sessionId: id, data: { action: "created" } });
+    return this.snapshot();
   }
-  private async reconcile() {
-    // Deletions are journaled before touching the engine, and are safe to retry.
-    for (const session of [...this.state.sessions]) {
-      for (const terminal of [...session.terminals]) {
-        if (session.deleting || terminal.deleting) {
-          await this.engine.remove(terminal.id);
-          const next = structuredClone(this.state);
-          next.sessions.find((s) => s.id === session.id)!.terminals =
-            next.sessions
-              .find((s) => s.id === session.id)!
-              .terminals.filter((t) => t.id !== terminal.id);
-          await this.persist(next);
-        }
-      }
-      if (session.deleting) {
-        const next = structuredClone(this.state);
-        next.sessions = next.sessions.filter((s) => s.id !== session.id);
-        await this.persist(next);
-        await this.filesystem.unregister(session.id);
-      }
-    }
+  async renameSession(id: string, name: string) {
+    name = nameSchema.parse(name);
+    await this.state.update(state => { findSession(state, id).name = name; });
+    await this.events.publish({ type: "session-changed", sourceId: "sessions", sessionId: id, data: { action: "updated" } });
+    return this.snapshot();
   }
-  private async view(): Promise<Snapshot> {
-    const sequence = ++this.sequence;
-    try {
-      await this.reconcile();
-      const processes = await this.engine.inspect();
-      return {
-        sequence,
-        presets: structuredClone(this.state.presets),
-        sessions: this.state.sessions.map((session) => ({
-          ...session,
-          terminals: session.terminals.map((terminal) => {
-            const live = processes.get(terminal.id);
-            return {
-              ...terminal,
-              status: terminal.deleting
-                ? "deleting"
-                : !live
-                  ? "missing"
-                  : live.dead
-                    ? "exited"
-                    : "running",
-              pid: live?.pid,
-              process: live?.process,
-              currentDirectory: live?.cwd,
-              exitCode: live?.exitCode,
-            };
-          }),
-        })),
-      };
-    } catch (error: any) {
-      return {
-        sequence,
-        presets: this.state.presets,
-        sessions: this.state.sessions.map((session) => ({
-          ...session,
-          terminals: session.terminals.map((terminal) => ({
-            ...terminal,
-            status: terminal.deleting ? "deleting" : "unknown",
-          })),
-        })),
-        engineError: error.message,
-      };
-    }
+  async updateSessionMetadata(id: string, metadata: SessionMetadata) {
+    metadata = sessionMetadataSchema.parse(metadata);
+    await this.state.update(state => { findSession(state, id).metadata = metadata; });
+    await this.events.publish({ type: "session-changed", sourceId: "sessions", sessionId: id, data: { action: "updated" } });
+    return this.snapshot();
   }
-  snapshot() {
-    return this.serial(() => this.view());
+  async deleteSession(id: string, policy: StopPolicy = "graceful") {
+    await this.stops.session(id, stopPolicySchema.parse(policy));
+    return this.snapshot();
   }
-  createSession(name: string, directory: string) {
-    return this.serial(async () => {
-      name = nameSchema.parse(name);
-      directory = z.string().min(1).max(4096).parse(directory);
-      const id = randomUUID();
-      const binding = await this.filesystem.register(id, directory);
-      const next = structuredClone(this.state);
-      next.sessions.push({
-        id,
-        name,
-        ...binding,
-        createdAt: new Date().toISOString(),
-        terminals: [],
-      });
-      await this.persist(next);
-      return this.view();
-    });
+  createTerminals(sessionId: string, presetId: string, count: number, cwd: string) {
+    return this.launchTerminals(sessionId, { presetId, count, cwd });
   }
-  renameSession(id: string, name: string) {
-    return this.serial(async () => {
-      this.session(id);
-      const next = structuredClone(this.state);
-      next.sessions.find((s) => s.id === id)!.name = nameSchema.parse(name);
-      await this.persist(next);
-      return this.view();
-    });
+  beginLaunch(sessionId: string, request: LaunchRequest) { return this.launches.begin(sessionId, request); }
+  cancelLaunch(id: string) { return this.launches.cancel(id); }
+  async launchTerminals(sessionId: string, request: LaunchRequest): Promise<LaunchResult> {
+    const initial = await this.beginLaunch(sessionId, request);
+    const record = await this.launches.wait(initial.id);
+    return { ...(await this.snapshot()), launchId: record.id, terminalIds: record.terminalIds, launchErrors: record.errors };
   }
-  deleteSession(id: string) {
-    return this.serial(async () => {
-      this.session(id);
-      const next = structuredClone(this.state);
-      next.sessions.find((s) => s.id === id)!.deleting = true;
-      await this.persist(next);
-      await this.reconcile();
-      return this.view();
-    });
+  async renameTerminal(sessionId: string, terminalId: string, label: string) {
+    label = nameSchema.parse(label);
+    await this.state.update(state => { findTerminal(state, sessionId, terminalId).label = label; });
+    return this.snapshot();
   }
-  createTerminals(
-    sessionId: string,
-    presetId: string,
-    count: number,
-    relativeCwd: string,
-  ) {
-    return this.launchTerminals(sessionId, {
-      presetId,
-      count,
-      cwd: relativeCwd,
-    });
+  async deleteTerminal(sessionId: string, terminalId: string, policy: StopPolicy = "graceful") {
+    await this.stops.terminal(sessionId, terminalId, stopPolicySchema.parse(policy));
+    return this.snapshot();
   }
-  launchTerminals(
-    sessionId: string,
-    request: LaunchRequest,
-  ): Promise<LaunchResult> {
-    return this.serial(async () => {
-      const session = this.session(sessionId);
-      const {
-        count,
-        cwd: relativeCwd,
-        ...options
-      } = launchSchema.parse(request);
-      if (session.terminals.length + count > 128)
-        throw new Error("A session can contain at most 128 terminals");
-      const preset = this.state.presets.find((p) => p.id === options.presetId);
-      if (options.presetId && !preset)
-        throw new Error("Choose an existing preset");
-      const command = options.command ?? preset!.command;
-      const cwd = await this.filesystem.run(session, {
-        action: "directory",
-        path: z.string().max(4096).parse(relativeCwd),
-      });
-      const next = structuredClone(this.state);
-      const target = next.sessions.find((s) => s.id === sessionId)!;
-      const used = new Set(target.terminals.map((t) => t.label));
-      let suffix = 1;
-      const baseLabel = (
-        options.label ||
-        (options.command === undefined ? preset?.name : undefined) ||
-        commandLabel(command)
-      ).slice(0, 70);
-      const terminals: TerminalRecord[] = Array.from({ length: count }, () => {
-        while (used.has(`${baseLabel} ${suffix}`)) suffix++;
-        const label = `${baseLabel} ${suffix++}`;
-        used.add(label);
-        return {
-          id: randomUUID(),
-          label,
-          cwd,
-          command,
-          createdAt: new Date().toISOString(),
-        };
-      });
-      target.terminals.push(...terminals);
-      if (options.savePresetAs) {
-        const existing = next.presets.find(
-          (p) => p.name === options.savePresetAs && p.command === command,
-        );
-        if (!existing) {
-          if (next.presets.length >= 100)
-            throw new Error("Remove an unused preset before saving another");
-          next.presets.push({
-            id: randomUUID(),
-            name: options.savePresetAs,
-            command,
-          });
-        }
-      }
-      // Write-ahead records make a crash between any two launches reconcilable.
-      await this.persist(next);
-      const launchErrors: LaunchResult["launchErrors"] = [];
-      for (const terminal of terminals) {
-        try {
-          await this.engine.create(terminal);
-        } catch (error: any) {
-          launchErrors.push({ terminalId: terminal.id, error: error.message });
-        }
-      }
-      if (launchErrors.length) {
-        const failed = structuredClone(this.state);
-        for (const failure of launchErrors)
-          failed.sessions
-            .find((s) => s.id === sessionId)!
-            .terminals.find((t) => t.id === failure.terminalId)!.launchError =
-            failure.error;
-        await this.persist(failed);
-      }
-      return {
-        ...(await this.view()),
-        terminalIds: terminals.map((t) => t.id),
-        launchErrors,
-      };
-    });
+  async savePresets(presets: Preset[]) {
+    presets = z.array(presetSchema).min(1).max(100).parse(presets); this.unique(presets);
+    await this.state.update(state => { state.presets = presets; });
+    return this.snapshot();
   }
-  renameTerminal(sessionId: string, terminalId: string, label: string) {
-    return this.serial(async () => {
-      this.session(sessionId);
-      const next = structuredClone(this.state);
-      const terminal = next.sessions
-        .find((s) => s.id === sessionId)!
-        .terminals.find((t) => t.id === terminalId);
-      if (!terminal) throw new Error("Terminal no longer exists");
-      terminal.label = nameSchema.parse(label);
-      await this.persist(next);
-      return this.view();
-    });
+  async saveEnvProfiles(profiles: EnvProfile[]) {
+    profiles = z.array(envProfileSchema).max(100).parse(profiles); this.unique(profiles);
+    await this.state.update(state => { state.envProfiles = profiles; });
+    return this.snapshot();
   }
-  deleteTerminal(sessionId: string, terminalId: string) {
-    return this.serial(async () => {
-      this.session(sessionId);
-      const next = structuredClone(this.state);
-      const terminal = next.sessions
-        .find((s) => s.id === sessionId)!
-        .terminals.find((t) => t.id === terminalId);
-      if (!terminal) throw new Error("Terminal no longer exists");
-      terminal.deleting = true;
-      await this.persist(next);
-      await this.reconcile();
-      return this.view();
-    });
+  async saveHooks(hooks: Hook[]) {
+    hooks = z.array(hookSchema).max(100).parse(hooks); this.unique(hooks);
+    await this.state.update(state => { state.hooks = hooks; });
+    return this.snapshot();
   }
-  savePresets(presets: Preset[]) {
-    return this.serial(async () => {
-      presets = z.array(presetSchema).min(1).max(100).parse(presets);
-      if (new Set(presets.map((p) => p.id)).size !== presets.length)
-        throw new Error("Preset IDs must be unique");
-      const next = structuredClone(this.state);
-      next.presets = presets;
-      await this.persist(next);
-      return this.view();
-    });
+  private unique(items: { id: string }[]) {
+    if (new Set(items.map(item => item.id)).size !== items.length) throw new AppError("INVALID_REQUEST", "Record IDs must be unique");
   }
-  files(sessionId: string, request: FileAction) {
-    return this.filesystem.run(this.session(sessionId), request);
-  }
+  files(sessionId: string, request: FileAction) { return this.filesystem.run(this.state.session(sessionId), request); }
   async requireTerminal(id: string) {
-    await this.queue;
-    const terminal = this.state.sessions
-      .filter((s) => !s.deleting)
-      .flatMap((s) => s.terminals)
-      .find((t) => t.id === id && !t.deleting);
-    if (!terminal) throw new Error("Terminal no longer exists");
-    if (!(await this.engine.inspect()).has(id))
-      throw new Error(
-        "This terminal is no longer running. Launch a new terminal to start work.",
-      );
+    const terminal = this.state.read().sessions.filter(s => !s.deleting).flatMap(s => s.terminals).find(t => t.id === id && !t.deleting);
+    if (!terminal) throw new AppError("NOT_FOUND", "Terminal no longer exists");
+    if (!(await this.engine.inspect()).has(id)) throw new AppError("NOT_FOUND", "This terminal is no longer running. Launch a new terminal to start work.");
     return terminal;
   }
 }

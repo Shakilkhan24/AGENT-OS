@@ -52,19 +52,25 @@ export class EventBus implements EventStream {
     this.initialized = true;
   }
   publish(input: DomainEventInput): Promise<DomainEvent> {
+    return this.publishMany([input]).then(events => events[0]);
+  }
+  publishMany(inputs: DomainEventInput[]): Promise<DomainEvent[]> {
     return this.mutex.run(async () => {
       if (!this.initialized) throw new Error("Event bus is not initialized");
-      const event = domainEventSchema.parse({
+      if (!inputs.length) return [];
+      if (inputs.length > 5000) throw new Error("Event batch is too large");
+      const batch = inputs.map((input, index) => domainEventSchema.parse({
         ...input,
-        seq: this.sequence + 1,
+        seq: this.sequence + index + 1,
         at: new Date().toISOString(),
         correlationId: input.correlationId || crypto.randomUUID(),
-      });
-      const events = [...this.events, event].slice(-this.limit);
-      await atomicJson(this.file, { version: 1, sequence: event.seq, events });
+      }));
+      const sequence = batch.at(-1)!.seq;
+      const events = [...this.events, ...batch].slice(-this.limit);
+      await atomicJson(this.file, { version: 1, sequence, events });
       this.events = events;
-      this.sequence = event.seq;
-      for (const listener of this.listeners) {
+      this.sequence = sequence;
+      for (const event of batch) for (const listener of this.listeners) {
         try {
           listener(structuredClone(event));
         } catch {
@@ -76,7 +82,7 @@ export class EventBus implements EventStream {
           });
         }
       }
-      return structuredClone(event);
+      return structuredClone(batch);
     });
   }
   replay(fromSeq: number): EventReplay {

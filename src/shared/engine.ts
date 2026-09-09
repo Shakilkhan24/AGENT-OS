@@ -22,6 +22,6 @@ export interface EngineAdapter {
   remove(id:string):Promise<void>;
   attach(id:string,cols:number,rows:number,output:(token:string,data:string)=>void,exit:(token:string)=>void):Attachment;
   onChange?(listener:()=>void):()=>void;
-  stop?(id:string,policy:StopPolicy,report:(stage:"interrupt"|"term"|"kill"|"removed",pids:number[])=>void):Promise<StopReport>;
+  stop?(id:string,policy:StopPolicy,report:(stage:"interrupt"|"term"|"kill"|"removed",pids:number[])=>void | Promise<void>):Promise<StopReport>;
   close?():void;
 }

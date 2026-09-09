@@ -22,6 +22,7 @@ app.setName("MINIMAL");
 const locked = app.requestSingleInstanceLock();
 let window: BrowserWindow | undefined;
 let filesystem: SessionFilesystem | undefined;
+let workspace: SessionService | undefined;
 let attachment: Attachment | undefined;
 let attachmentGeneration = 0;
 const detach = () => {
@@ -63,8 +64,11 @@ else {
         new Store(directory),
         engine,
         filesystem,
+        settings,
       );
       await service.initialize();
+      workspace = service;
+      service.start();
       electronSession.defaultSession.setPermissionRequestHandler(
         (_contents, _permission, callback) => callback(false),
       );
@@ -273,6 +277,7 @@ else {
 }
 app.on("window-all-closed", () => app.quit());
 app.on("before-quit", () => {
+  workspace?.close();
   detach();
   filesystem?.close();
 });

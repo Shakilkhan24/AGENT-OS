@@ -143,7 +143,8 @@ export class TmuxEngine implements EngineAdapter {
   }
   onChange(listener: () => void) { return this.watcher.subscribe(listener); }
   async stop(id: string, policy: StopPolicy, progress: StopProgress) {
-    const pane = (await this.inspect()).get(id);
+    let pane: ProcessInfo | undefined;
+    try { pane = (await this.inspect()).get(id); } catch (error) { if (policy !== "force") throw error; }
     return stopTerminal(pane, policy, this.settings.gracefulStopMs,
       () => this.command("send-keys", "-t", `=minimal_${id}:`, "C-c").then(() => {}),
       () => this.remove(id), progress);

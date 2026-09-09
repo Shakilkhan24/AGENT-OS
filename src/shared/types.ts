@@ -1,6 +1,8 @@
 import type { EnvProfile } from "./env-profiles";
 import type { Hook } from "./hooks";
 import type { LaunchRecord, SessionMetadata } from "./models";
+import type { DomainEvent, StopPolicy } from "./events";
+import type { Failure } from "./errors";
 export type { EnvProfile, Hook, SessionMetadata };
 export interface Preset {
   id: string;
@@ -22,6 +24,7 @@ export interface LaunchRequest {
   originHookId?: string;
 }
 export interface LaunchResult extends Snapshot {
+  launchId?: string;
   terminalIds: string[];
   launchErrors: { terminalId: string; error: string }[];
 }
@@ -32,6 +35,7 @@ export interface TerminalRecord {
   command: string;
   createdAt: string;
   deleting?: boolean;
+  deletionPolicy?: StopPolicy;
   launchError?: string;
   startedAt?: string;
   endedAt?: string;
@@ -53,6 +57,7 @@ export interface SessionRecord {
   terminals: TerminalRecord[];
   deleting?: boolean;
   metadata?: SessionMetadata;
+  deletionPolicy?: StopPolicy;
 }
 export interface State {
   version: 2;
@@ -63,7 +68,7 @@ export interface State {
   launches: LaunchRecord[];
 }
 export interface TerminalView extends TerminalRecord {
-  status: "running" | "exited" | "missing" | "deleting" | "unknown";
+  status: Extract<DomainEvent, {type: "terminal-status"}>["data"]["status"];
   pid?: number;
   process?: string;
   currentDirectory?: string;
@@ -77,6 +82,10 @@ export interface Snapshot {
   sessions: SessionView[];
   presets: Preset[];
   engineError?: string;
+  engineFailure?: Failure;
+  envProfiles?: EnvProfile[];
+  hooks?: Hook[];
+  launches?: LaunchRecord[];
 }
 export interface FileEntry {
   name: string;

@@ -94,6 +94,7 @@ export const replaySchema = z.object({
 export type EventReplay = z.infer<typeof replaySchema>;
 export interface EventStream {
   publish(event: DomainEventInput): Promise<DomainEvent>;
+  publishMany(events: DomainEventInput[]): Promise<DomainEvent[]>;
   replay(fromSeq: number): EventReplay;
   subscribe(listener: (event: DomainEvent) => void): () => void;
 }

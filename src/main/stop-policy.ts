@@ -3,7 +3,7 @@ import type { ProcessInfo, StopReport } from "../shared/engine";
 import type { StopPolicy } from "../shared/events";
 import { ProcessTree } from "./process-tree";
 
-export type StopProgress = (stage: "interrupt" | "term" | "kill" | "removed", pids: number[]) => void;
+export type StopProgress = (stage: "interrupt" | "term" | "kill" | "removed", pids: number[]) => void | Promise<void>;
 export async function stopTerminal(pane: ProcessInfo | undefined, policy: StopPolicy, graceMs: number,
   interrupt: () => Promise<void>, remove: () => Promise<void>, progress: StopProgress): Promise<StopReport> {
   const signalled = new Set<number>();
@@ -18,20 +18,20 @@ export async function stopTerminal(pane: ProcessInfo | undefined, policy: StopPo
   };
   if (tree && policy !== "force") {
     if (policy === "graceful") {
-      await interrupt(); progress("interrupt", await tree.remaining());
+      await interrupt(); await progress("interrupt", await tree.remaining());
       await settle(graceMs);
     }
     if (policy === "graceful" || policy === "term") {
       await tree.refresh();
-      const pids = await tree.signal("SIGTERM"); pids.forEach(id => signalled.add(id)); progress("term", pids);
+      const pids = await tree.signal("SIGTERM"); pids.forEach(id => signalled.add(id)); await progress("term", pids);
       await settle(graceMs);
     }
     await tree.refresh();
-    const pids = await tree.signal("SIGKILL"); pids.forEach(id => signalled.add(id)); progress("kill", pids);
+    const pids = await tree.signal("SIGKILL"); pids.forEach(id => signalled.add(id)); await progress("kill", pids);
     await settle(150);
   }
   await remove();
-  progress("removed", []);
+  await progress("removed", []);
   return { policy, signalled: [...signalled], remaining: tree ? await tree.remaining() : [],
     bestEffort: true, accountingIncomplete: tree?.incomplete ?? Boolean(pane && !pane.dead) };
 }
