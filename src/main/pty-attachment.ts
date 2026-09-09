@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { StringDecoder } from "node:string_decoder";
 import type { Attachment } from "../shared/engine";
 import { log } from "./logging";
-export function createAttachment(helper:string,args:string[],cols:number,rows:number,output:(token:string,data:string)=>void,exit:(token:string)=>void):Attachment {
+export function createAttachment(helper:string,args:string[],cols:number,rows:number,output:(token:string,data:string)=>void,exit:(token:string)=>void,env:NodeJS.ProcessEnv=process.env):Attachment {
     const token = randomUUID();
     const child: ChildProcessWithoutNullStreams = spawn(
       "python3",
@@ -16,7 +16,7 @@ export function createAttachment(helper:string,args:string[],cols:number,rows:nu
         "tmux",
         ...args,
       ],
-      { stdio: "pipe" },
+      { stdio: "pipe", env },
     );
     let closed = false;
     let outstanding = 0;

@@ -57,6 +57,7 @@ else {
       const engine = new TmuxEngine(
         directory,
         path.join(__dirname, "../helpers/pty_bridge.py"),
+        settings,
       );
       const service = new SessionService(
         new Store(directory),

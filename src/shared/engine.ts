@@ -13,7 +13,7 @@ export interface Attachment {
 export interface EngineCapabilities {
   id:string;platforms:readonly string[];persistent:boolean;environment:boolean;pushStatus:boolean;processTree:boolean;
 }
-export interface StopReport {policy:StopPolicy;signalled:number[];remaining:number[];bestEffort:true}
+export interface StopReport {policy:StopPolicy;signalled:number[];remaining:number[];bestEffort:true;accountingIncomplete:boolean}
 export interface EngineAdapter {
   readonly capabilities:EngineCapabilities;
   initialize():Promise<void>;
