@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  headless:
+    name: Typecheck, backend tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12"
+          cache: "npm"
+
+      - name: Install Linux runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux python3 libgtk-3-0 libnss3 libasound2t64 libgbm1 xvfb
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Backend tests
+        env:
+          CI: "1"
+        run: xvfb-run --auto-servernum npm test
+
+      - name: Production build
+        run: npm run build
+
+  desktop:
+    name: Desktop e2e (Playwright + xvfb)
+    runs-on: ubuntu-latest
+    needs: headless
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12"
+          cache: "npm"
+
+      - name: Install Linux runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux python3 libgtk-3-0 libnss3 libasound2t64 libgbm1 xvfb
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build
+        run: npm run build
+
+      - name: Desktop scenarios
+        env:
+          CI: "1"
+        run: xvfb-run --auto-servernum npm run test:desktop
+
+  package:
+    name: Packaged runtime smoke
+    runs-on: ubuntu-latest
+    needs: headless
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12"
+          cache: "npm"
+
+      - name: Install Linux runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux python3 libgtk-3-0 libnss3 libasound2t64 libgbm1 xvfb
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build packaged runtime
+        run: npm run package
+
+      - name: Packaged smoke
+        env:
+          CI: "1"
+        run: xvfb-run --auto-servernum npm run test:package

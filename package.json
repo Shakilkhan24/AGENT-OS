@@ -1,6 +1,6 @@
 {
   "name": "minimal",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "main": "dist/main/index.cjs",
   "scripts": {
     "build": "node scripts/build.mjs && vite build",
@@ -14,7 +14,24 @@
     "test:package": "tsx tests/package-smoke.ts"
   },
   "license": "ISC",
-  "description": "A local desktop workspace for persistent sessions, terminals, and scoped files.",
+  "description": "A local desktop workspace for persistent project sessions, terminals, and scoped files. Built for Linux and WSL2 with WSLg.",
+  "keywords": [
+    "electron",
+    "tmux",
+    "terminal",
+    "desktop",
+    "wsl",
+    "linux",
+    "developer-tools"
+  ],
+  "homepage": "https://github.com/Shakilkhan24/AGENT-OS#readme",
+  "bugs": {
+    "url": "https://github.com/Shakilkhan24/AGENT-OS/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Shakilkhan24/AGENT-OS.git"
+  },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
