@@ -101,11 +101,24 @@ export function Terminal({
     });
     const copy = () =>
       window.minimal.writeClipboard(term.getSelection()).catch(report);
+    // Paste the clipboard contents. Text that contains newlines, carriage
+    // returns or tabs is wrapped in the standard bracketed-paste escape
+    // sequences (\x1b[200~ ... \x1b[201~) so the receiving program (Bash's
+    // readline, an editor, etc.) treats the paste as a single atomic edit
+    // instead of executing each newline as Enter or each tab as completion.
+    // The wrappers are forwarded byte-for-byte through the PTY; tmux's
+    // escape-time (500ms in tmux-engine.ts) reassembles them as a single
+    // sequence even on a busy paste.
     const pasteText = () =>
       window.minimal
         .readClipboard()
         .then((text) => {
-          if (!disposed) term.paste(text);
+          if (disposed || !text) return;
+          if (text.includes("\n") || text.includes("\r") || text.includes("\t")) {
+            term.paste(`\x1b[200~${text}\x1b[201~`);
+          } else {
+            term.paste(text);
+          }
         })
         .catch(report);
     term.attachCustomKeyEventHandler((event) => {
@@ -161,12 +174,16 @@ export function Terminal({
           );
       });
     const element = host.current;
-    const paste = async (event: MouseEvent) => {
+    // Right-click always pastes from the OS clipboard. xterm.js installs its
+    // own contextmenu handler that selects the word under the cursor before
+    // this listener runs, so gating on `term.hasSelection()` here would route
+    // every right-click to copy that word instead of paste. Use Ctrl+Shift+C
+    // to copy a selection explicitly.
+    const onContextMenu = (event: MouseEvent) => {
       event.preventDefault();
-      if (term.hasSelection()) await copy();
-      else await pasteText();
+      void pasteText();
     };
-    element.addEventListener("contextmenu", paste);
+    element.addEventListener("contextmenu", onContextMenu);
     return () => {
       disposed = true;
       setConnected(false);
@@ -175,7 +192,7 @@ export function Terminal({
       offOutput();
       offExit();
       onData.dispose();
-      element.removeEventListener("contextmenu", paste);
+      element.removeEventListener("contextmenu", onContextMenu);
       if (token) void window.minimal.detach(token);
       term.dispose();
     };

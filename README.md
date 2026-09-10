@@ -31,7 +31,7 @@ The package includes Electron and compiled application code. It still requires t
 5. **Explorer** browses the bound project folder. Double-click or select Open to enter folders and open UTF-8 text. Toolbar buttons create files/folders, rename, move, and delete. Move destinations include the filename and are relative to the session root. Text editing supports files up to 2 MiB. Deleting project files requires confirmation and is permanent. Use **Hide explorer** to give the terminal more space.
 6. **Close and reopen** freely. tmux owns processes and history independently of the GUI. Switching tabs only attaches a disposable client. The selected tab and explorer visibility are remembered. Deleting a session stops its terminals and keeps project files.
 
-Use Ctrl+C to interrupt a process. Mouse scrolling accesses tmux history. Right-click copies selected terminal text or pastes from the clipboard; the normal desktop terminal copy/paste shortcuts are also available.
+Use Ctrl+C to interrupt a process. Mouse scrolling accesses tmux history. Right-click pastes from the clipboard; Ctrl+Shift+C copies a selection, and Ctrl+Shift+V pastes from the keyboard. Multi-line clipboard text is wrapped in the standard bracketed-paste escape sequences, so a pasted multi-line script arrives at the shell as a single edit instead of executing each newline as Enter.
 
 ## Persistence and recovery
 

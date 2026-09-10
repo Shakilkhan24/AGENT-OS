@@ -74,13 +74,26 @@ export class TmuxEngine implements EngineAdapter {
         "set -g prefix None",
         "set -g prefix2 None",
         "unbind -a -q",
-        "set -s escape-time 0",
+        // 500ms is tmux's default and the shortest window that reliably
+        // reassembles multi-byte escape sequences (bracketed-paste markers,
+        // arrow keys, F1–F12, modifier-bearing keys). The previous value of
+        // 0 caused every escape byte to be delivered individually, which
+        // split pasted text and broke mouse-driven paste.
+        "set -s escape-time 500",
         "set -g default-terminal xterm-256color",
         "set -g allow-rename off",
         "set -g automatic-rename off",
         "set -g destroy-unattached off",
         "set -g exit-empty on",
         "set -g default-shell /bin/bash",
+        // Disable tmux's mouse-driven context menu. xterm.js handles copy
+        // and paste at the renderer; without these unbinds, tmux opens its
+        // own menu on MouseDown3Pane and prints "Horizontal Split" /
+        // "Vertical Split" into the terminal, which the user perceives as
+        // the terminal splitting on right-click. `bind -n key ""` rebinds
+        // to an empty command; `none` is not a valid tmux command.
+        "bind -n MouseDown3Pane \"\"",
+        "bind -n MouseDown3Status \"\"",
         `set-hook -g pane-died 'wait-for -S minimal-exited-${this.paths.key}'`,
         `set-hook -g pane-exited 'wait-for -S minimal-exited-${this.paths.key}'`,
         "",

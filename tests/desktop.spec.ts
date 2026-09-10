@@ -159,6 +159,31 @@ test("desktop workflows, real terminal input, file editing, and closing/reopenin
         readFile(path.join(root, "paste-proof.txt"), "utf8").catch(() => ""),
       )
       .toBe("Workspace ready.\n");
+    // Right-click paste must reach the shell as a single atomic write.
+    // Without bracketed-paste wrapping, multi-line clipboard text arrives
+    // as keypress-by-keypress input; newlines execute as Enter and a
+    // pasted command splits across multiple shell lines, leaving the
+    // terminal in a broken state.
+    await app.evaluate(({ clipboard }) => {
+      clipboard.readText = async () => "printf 'right-click-ok\\n'";
+    });
+    await page.locator(".xterm-helper-textarea").focus();
+    // dispatchEvent("contextmenu") reaches the renderer-side listener
+    // registered on the terminal-surface testid without depending on
+    // tmux/xterm mouse-handling internals.
+    await page.evaluate(() => {
+      const el = document.querySelector("[data-testid='terminal-surface']");
+      el?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+        }),
+      );
+    });
+    await expect(page.locator(".xterm-rows")).toContainText("printf");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".xterm-rows")).toContainText("right-click-ok");
     await page.screenshot({ path: "docs/desktop.png" });
     await app.close();
     expect((await engine.inspect()).size).toBe(2);
