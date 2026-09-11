@@ -25,7 +25,7 @@ const api: API = {
     ipcRenderer.invoke("files", sessionId, request),
   attach: (id, cols, rows) => ipcRenderer.invoke("attach", id, cols, rows),
   detach: (token) => ipcRenderer.invoke("detach", token),
-  input: (token, data) => ipcRenderer.invoke("input", token, data),
+  input: (token, data) => ipcRenderer.send("input", token, data),
   resize: (token, cols, rows) => ipcRenderer.send("resize", token, cols, rows),
   acknowledge: (token, bytes) => ipcRenderer.send("acknowledge", token, bytes),
   readClipboard: () => ipcRenderer.invoke("read-clipboard"),
@@ -47,6 +47,14 @@ const api: API = {
     ipcRenderer.on("terminal-exit", wrapped);
     return () => {
       ipcRenderer.removeListener("terminal-exit", wrapped);
+    };
+  },
+  onStartupRecovered: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, message: string) =>
+      listener(message);
+    ipcRenderer.on("startup-recovered", wrapped);
+    return () => {
+      ipcRenderer.removeListener("startup-recovered", wrapped);
     };
   },
 };

@@ -9,6 +9,7 @@ import {
   type EventStream,
 } from "../shared/events";
 import { atomicJson } from "./atomic";
+import { Debouncer } from "./debouncer";
 import { Mutex } from "./mutex";
 import { log } from "./logging";
 
@@ -17,6 +18,7 @@ const journalSchema = z.object({
   sequence: z.number().int().nonnegative(),
   events: z.array(domainEventSchema).max(5000),
 });
+type JournalState = { version: 1; sequence: number; events: DomainEvent[] };
 /** A bounded durable event history; notifications follow persistence in sequence order. */
 export class EventBus implements EventStream {
   private events: DomainEvent[] = [];
@@ -24,6 +26,7 @@ export class EventBus implements EventStream {
   private mutex = new Mutex();
   private listeners = new Set<(event: DomainEvent) => void>();
   private initialized = false;
+  private journal!: Debouncer<JournalState>;
   readonly file: string;
   constructor(
     directory: string,
@@ -32,6 +35,10 @@ export class EventBus implements EventStream {
     if (!Number.isInteger(limit) || limit < 1 || limit > 5000)
       throw new Error("Invalid event retention limit");
     this.file = path.join(directory, "events.json");
+    this.journal = new Debouncer<JournalState>(
+      (state) => atomicJson(this.file, state, { durability: "async-strong" }),
+      25,
+    );
   }
   async initialize() {
     try {
@@ -54,6 +61,18 @@ export class EventBus implements EventStream {
   publish(input: DomainEventInput): Promise<DomainEvent> {
     return this.publishMany([input]).then(events => events[0]);
   }
+  /**
+   * Enqueue `inputs` for ordered, durable delivery. Persistence coalesces:
+   * a burst of concurrent `publishMany` calls collapses into one journal
+   * write per debounce window. Subscribers always see events in sequence
+   * order as soon as they are enqueued; only the on-disk journal lags by
+   * up to one debounce window.
+   *
+   * Returns the assigned events. Resolves when the events are enqueued;
+   * the durable write completes slightly later. Use `flush()` to await
+   * durable persistence before shutdown or when the next test asserts on
+   * the journal file.
+   */
   publishMany(inputs: DomainEventInput[]): Promise<DomainEvent[]> {
     return this.mutex.run(async () => {
       if (!this.initialized) throw new Error("Event bus is not initialized");
@@ -65,11 +84,8 @@ export class EventBus implements EventStream {
         at: new Date().toISOString(),
         correlationId: input.correlationId || crypto.randomUUID(),
       }));
-      const sequence = batch.at(-1)!.seq;
-      const events = [...this.events, ...batch].slice(-this.limit);
-      await atomicJson(this.file, { version: 1, sequence, events });
-      this.events = events;
-      this.sequence = sequence;
+      this.sequence = batch.at(-1)!.seq;
+      this.events = [...this.events, ...batch].slice(-this.limit);
       for (const event of batch) for (const listener of this.listeners) {
         try {
           listener(structuredClone(event));
@@ -82,6 +98,11 @@ export class EventBus implements EventStream {
           });
         }
       }
+      void this.journal.schedule({
+        version: 1,
+        sequence: this.sequence,
+        events: this.events,
+      });
       return structuredClone(batch);
     });
   }
@@ -103,7 +124,23 @@ export class EventBus implements EventStream {
       this.listeners.delete(listener);
     };
   }
+  /** Block until pending journal writes are durable. */
   async flush() {
-    await this.mutex.run(async () => {});
+    // Hold the mutex while draining the journal so no new publishes can land
+    // between our check and the actual flush.
+    await this.mutex.run(async () => {
+      await this.journal.flush();
+    });
+  }
+  /**
+   * Flush and disarm. After `close()` returns, any further `publish*` calls
+   * will throw (the underlying mutex is held until close completes, so no
+   * publish can land during the disarm window).
+   */
+  async close() {
+    await this.mutex.run(async () => {
+      await this.journal.flush();
+      await this.journal.close();
+    });
   }
 }

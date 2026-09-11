@@ -10,12 +10,29 @@ export class Reconciler {
   private generation = 0;
   private pending?: { generation: number; promise: Promise<void> };
   private processes = new Map<string, ProcessInfo>();
+  private inspectInflight?: Promise<Map<string, ProcessInfo>>;
   private signatures = new Map<string, string>();
   private failure?: Failure;
   private prompts = new Set<string>();
   constructor(private state: WorkspaceState, private engine: EngineAdapter, private events: EventBus) {}
   invalidate() { this.generation++; }
   prompt(id: string, ready: boolean) { if (ready) this.prompts.add(id); else this.prompts.delete(id); }
+  /** Shared, coalesced view of tmux processes. See {@link inspectCoalesced}. */
+  cachedInspect(): Promise<Map<string, ProcessInfo>> { return this.inspectCoalesced(); }
+  /**
+   * Returns the current process map. Concurrent callers share the in-flight
+   * promise so a burst of `snapshot()` calls (e.g. one from a watcher event
+   * and another from an incoming IPC request a few ms later) fork the python
+   * helper exactly once. No value caching: every call after the in-flight
+   * one completes re-invokes the engine so failures and removals are visible
+   * on the very next snapshot.
+   */
+  private inspectCoalesced(): Promise<Map<string, ProcessInfo>> {
+    if (this.inspectInflight) return this.inspectInflight;
+    const promise = this.engine.inspect().finally(() => { this.inspectInflight = undefined; });
+    this.inspectInflight = promise;
+    return promise;
+  }
   private status(terminal: { id: string; deleting?: boolean; launchState?: string }): TerminalView["status"] {
     const live = this.processes.get(terminal.id);
     return terminal.deleting ? "deleting" : this.failure ? "unknown" : !live
@@ -24,7 +41,7 @@ export class Reconciler {
   }
   private async refresh(generation: number) {
     let processes: Map<string, ProcessInfo>;
-    try { processes = await this.engine.inspect(); }
+    try { processes = await this.inspectCoalesced(); }
     catch (error) {
       if (generation !== this.generation) return;
       const failure = asFailure(error, "engine");
@@ -36,7 +53,7 @@ export class Reconciler {
     this.processes = processes;
     if (this.failure) await this.events.publish({ type: "engine-restored", sourceId: "engine", data: {} });
     this.failure = undefined;
-    const changes = this.state.read().sessions.flatMap(s => s.terminals).filter(terminal => {
+    const changes = this.state.view().sessions.flatMap(s => s.terminals).filter(terminal => {
       const live = processes.get(terminal.id);
       return live && ((!terminal.startedAt) || (live.dead && (terminal.endedAt !== live.endedAt || terminal.exitCode !== live.exitCode || terminal.exitSignal !== live.exitSignal)));
     });
@@ -46,18 +63,23 @@ export class Reconciler {
         const live = processes.get(terminal.id)!;
         terminal.startedAt ??= new Date().toISOString();
         if (live.dead) {
-          terminal.endedAt = live.endedAt;
-          terminal.exitCode = live.exitCode;
-          terminal.exitSignal = live.exitSignal;
+          // Don't clobber an exit code we already recorded with `undefined`
+          // if the engine's first report happens to omit it (tmux can hand
+          // us `pane_dead_status=""` before the next refresh fills it in).
+          if (live.endedAt !== undefined) terminal.endedAt = live.endedAt;
+          if (live.exitCode !== undefined) terminal.exitCode = live.exitCode;
+          if (live.exitSignal !== undefined) terminal.exitSignal = live.exitSignal;
         }
       }
     });
     const events: DomainEventInput[] = [];
     const signatures = new Map<string, string>();
-    for (const session of this.state.read().sessions) for (const terminal of session.terminals) {
+    const view = this.state.view();
+    for (const session of view.sessions) for (const terminal of session.terminals) {
       const live = this.processes.get(terminal.id);
       const data = { status: this.status(terminal), exitCode: live?.exitCode ?? terminal.exitCode, exitSignal: live?.exitSignal ?? terminal.exitSignal };
-      const signature = JSON.stringify(data); signatures.set(terminal.id, signature);
+      const signature = `${data.status}|${data.exitCode ?? ""}|${data.exitSignal ?? ""}`;
+      signatures.set(terminal.id, signature);
       if (this.signatures.get(terminal.id) !== signature) events.push({ type: "terminal-status", sourceId: "engine", sessionId: session.id, terminalId: terminal.id, originHookId: terminal.originHookId, data });
     }
     await this.events.publishMany(events);
@@ -71,10 +93,12 @@ export class Reconciler {
       void pending.promise.finally(() => { if (this.pending === pending) this.pending = undefined; }).catch(() => {});
     }
     await this.pending.promise;
-    const state = this.state.read();
-    return { sequence, presets: state.presets, envProfiles: state.envProfiles, hooks: state.hooks, launches: state.launches,
+    // Use the frozen view for read-only consumers; the snapshot is a fresh
+    // object built from it, so the renderer's identity check still works.
+    const view = this.state.view();
+    return { sequence, presets: view.presets, envProfiles: view.envProfiles, hooks: view.hooks, launches: view.launches,
       engineError: this.failure?.message, engineFailure: this.failure,
-      sessions: state.sessions.map(session => ({ ...session, terminals: session.terminals.map(terminal => {
+      sessions: view.sessions.map(session => ({ ...session, terminals: session.terminals.map(terminal => {
         const live = this.processes.get(terminal.id);
         return { ...terminal, status: this.status(terminal), pid: live?.pid, process: live?.process, currentDirectory: live?.cwd,
           exitCode: live?.exitCode ?? terminal.exitCode, exitSignal: live?.exitSignal ?? terminal.exitSignal };

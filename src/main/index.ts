@@ -17,6 +17,7 @@ import { SessionService } from "./service";
 import { Logger, configureLogging, log } from "./logging";
 import { SettingsStore } from "./settings-store";
 import { DraftStore } from "./draft-store";
+import { runWithWatchdog } from "./shutdown";
 
 if (process.env.MINIMAL_DATA_DIR)
   app.setPath("userData", path.resolve(process.env.MINIMAL_DATA_DIR));
@@ -64,8 +65,9 @@ else {
         path.join(__dirname, "../helpers/pty_bridge.py"),
         settings,
       );
+      const store = new Store(directory);
       const service = new SessionService(
-        new Store(directory),
+        store,
         engine,
         filesystem,
         settings,
@@ -183,12 +185,22 @@ else {
       handle("detach", (token) => {
         if (attachment?.token === id.parse(token)) detach();
       });
-      handle("input", (token, data) => {
-        if (attachment?.token !== id.parse(token))
-          throw new Error(
-            "Terminal connection changed. Reconnect before typing.",
-          );
-        return attachment.input(z.string().max(65536).parse(data));
+      ipcMain.on("input", (event, token, data) => {
+        try {
+          trusted(event);
+          if (attachment?.token !== id.parse(token)) return;
+          attachment.input(z.string().max(65536).parse(data));
+        } catch (error) {
+          log({
+            level: "warning",
+            source: "ipc",
+            event: "message-rejected",
+            fields: {
+              channel: "input",
+              kind: error instanceof Error ? error.name : "unknown",
+            },
+          });
+        }
       });
       for (const channel of ["resize", "acknowledge"])
         ipcMain.on(channel, (event, token, first, second) => {
@@ -246,6 +258,21 @@ else {
         detach();
         window = undefined;
       });
+      // If `Store.load()` couldn't parse the existing state.json, it
+      // preserves the file and falls back to the empty default. Surface
+      // the reason to the renderer once the window has finished loading.
+      if (store.recoveredFromInvalid) {
+        log({
+          level: "warning",
+          source: "application",
+          event: "state-recovered",
+          fields: { message: store.recoveredFromInvalid },
+        });
+        const message = store.recoveredFromInvalid;
+        window.webContents.once("did-finish-load", () => {
+          window?.webContents.send("startup-recovered", message);
+        });
+      }
       await window.loadFile(location);
     })
     .catch((error) => {
@@ -262,9 +289,22 @@ else {
       app.quit();
     });
 }
+let shuttingDown = false;
+const SHUTDOWN_FLUSH_BUDGET_MS = 5000;
 app.on("window-all-closed", () => app.quit());
-app.on("will-quit", () => {
-  workspace?.close();
-  detach();
-  filesystem?.close();
+app.on("will-quit", (event) => {
+  // Flush pending state.json and event-journal writes before the process
+  // exits. Without this the debouncer's window can drop the last mutation.
+  // The watchdog caps the wait — see src/main/shutdown.ts.
+  if (workspace && !shuttingDown) {
+    event.preventDefault();
+    shuttingDown = true;
+    detach();
+    filesystem?.close();
+    const watchdog = runWithWatchdog(() => workspace!.close(), {
+      budgetMs: SHUTDOWN_FLUSH_BUDGET_MS,
+      onTimeout: () => app.exit(1),
+    });
+    watchdog.done.then(() => app.exit(0));
+  }
 });

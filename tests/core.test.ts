@@ -40,6 +40,7 @@ async function fixture() {
   await service.initialize();
   const cleanup = async () => {
     for (const id of (await engine.inspect()).keys()) await engine.remove(id);
+    await service.close();
     filesystem.close();
     await rm(base, { recursive: true, force: true });
   };
@@ -154,11 +155,24 @@ test("a fast command retains its exit code and is never rerun after restart", as
   };
   await f.service.savePresets([preset]);
   await f.service.createTerminals(session.id, preset.id, 1, "");
-  let terminal = (await f.service.snapshot()).sessions[0].terminals[0];
-  for (let i = 0; i < 100 && terminal.status === "running"; i++) {
+  // Wait for the engine to populate the exit code. tmux sometimes hands us
+  // `dead=1` before `pane_dead_status` fills in (a known gap when the OS is
+  // busy reaping), so we keep polling until both arrive together. The
+  // 5s ceiling is comfortably above the worst observed wall-clock on a
+  // loaded CI runner.
+  let terminal: import("../src/shared/types").TerminalView | undefined;
+  let snapshot = await f.service.snapshot();
+  let engineInfo = (await f.engine.inspect()).get(snapshot.sessions[0].terminals[0].id);
+  for (let i = 0; i < 100; i++) {
+    if (engineInfo?.dead && engineInfo.exitCode !== undefined) break;
     await delay(50);
-    terminal = (await f.service.snapshot()).sessions[0].terminals[0];
+    snapshot = await f.service.snapshot();
+    engineInfo = (await f.engine.inspect()).get(snapshot.sessions[0].terminals[0].id);
   }
+  assert.equal(engineInfo?.dead, true);
+  assert.equal(engineInfo?.exitCode, 7);
+  // The reconciler should pick it up on the next snapshot.
+  terminal = (await f.service.snapshot()).sessions[0].terminals[0];
   assert.equal(terminal.status, "exited");
   assert.equal(terminal.exitCode, 7);
   const reopened = new SessionService(f.store, f.engine, f.filesystem);
@@ -294,6 +308,7 @@ test("write-ahead records and deletion tombstones recover without resurrecting w
   };
   state.sessions[0].terminals.push(pending);
   await f.store.save(state);
+  await f.store.flush();
   let service = new SessionService(f.store, f.engine, f.filesystem);
   await service.initialize();
   assert.equal(
@@ -307,17 +322,28 @@ test("write-ahead records and deletion tombstones recover without resurrecting w
   const deleting = await f.store.load();
   deleting.sessions[0].deleting = true;
   await f.store.save(deleting);
+  await f.store.flush();
   service = new SessionService(f.store, f.engine, f.filesystem);
   await service.initialize();
   assert.equal((await service.snapshot()).sessions.length, 0);
   assert.equal((await f.engine.inspect()).has(terminal.id), false);
 });
-test("a corrupt state file fails visibly and is preserved", async (t) => {
+test("a corrupt state file is preserved and recovered to the empty default", async (t) => {
+  // A malformed state.json is no longer fatal at startup. The file stays
+  // byte-for-byte on disk (so the user can fix it manually), the in-memory
+  // state is the empty default, and `recoveredFromInvalid` exposes the
+  // reason to callers so they can surface a non-blocking toast.
   const f = await fixture();
   t.after(f.cleanup);
   const file = path.join(f.store.directory, "state.json");
   await writeFile(file, "{broken");
-  await assert.rejects(f.store.load(), /preserved/);
+  const state = await f.store.load();
+  assert.equal(state.version, 2);
+  assert.equal(state.sessions.length, 0);
+  assert.match(
+    f.store.recoveredFromInvalid ?? "",
+    /Saved state could not be read; original file preserved\./,
+  );
   assert.equal(await readFile(file, "utf8"), "{broken");
 });
 test("twelve independent sessions keep running while snapshots and file operations remain responsive", async (t) => {

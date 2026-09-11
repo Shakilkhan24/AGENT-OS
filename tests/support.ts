@@ -34,7 +34,7 @@ export async function serviceFixture() {
   await service.initialize();
   const session = (await service.createSession("Project", root)).sessions[0];
   return { base, root, store, engine, files, service, session, async cleanup() {
-    service.close(); files.close(); await rm(base, { recursive: true, force: true });
+    await service.close(); files.close(); await rm(base, { recursive: true, force: true });
   } };
 }
 export function deferred() {

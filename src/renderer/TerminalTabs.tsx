@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { Plus, X } from "lucide-react";
 import type { TerminalView } from "../shared/types";
 
-export function TerminalTabs({
+function TerminalTabsImpl({
   terminals,
   selected,
   closing,
@@ -82,3 +82,11 @@ export function TerminalTabs({
     </div>
   );
 }
+
+/**
+ * Memoized so the tab bar doesn't re-render when an unrelated part of the
+ * snapshot changes (e.g. a status tick on a non-selected terminal). The
+ * `terminals` array reference changes only when the underlying terminal
+ * list mutates thanks to the shallow-equality guard in `useWorkspace`.
+ */
+export const TerminalTabs = memo(TerminalTabsImpl);

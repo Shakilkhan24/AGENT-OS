@@ -46,7 +46,16 @@ test("v1 migrates once to v2, preserves original bytes, IDs and command intents"
     1,
   );
   await writeFile(path.join(root, "state.json"), '{"version":99}');
-  await assert.rejects(store.load(), /preserved/);
+  // A v99 state.json is no longer fatal: the file is preserved on disk and
+  // the in-memory state falls back to the empty default. `recoveredFromInvalid`
+  // exposes the reason so the caller can surface a toast.
+  const recovered = await store.load();
+  assert.equal(recovered.version, 2);
+  assert.equal(recovered.sessions.length, 0);
+  assert.match(
+    store.recoveredFromInvalid ?? "",
+    /Saved state could not be read; original file preserved\./,
+  );
   assert.equal(
     await readFile(path.join(root, "state.json"), "utf8"),
     '{"version":99}',

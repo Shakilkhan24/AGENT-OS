@@ -50,16 +50,40 @@ export function Terminal({
     term.loadAddon(fit);
     term.open(host.current);
     fit.fit();
-    const write = (data: string) => {
+    // Coalesce per-frame: xterm.js can absorb thousands of `term.write` calls
+    // per second, but each one schedules a render. On burst output (e.g.
+    // `cat`-ing a 200 KB file) we can receive dozens of IPC chunks in a
+    // single animation frame; queue them and flush once per rAF instead of
+    // paying the cost on every chunk. Single-chunk writes (the common case
+    // for live typing) still flush immediately.
+    let frameBuffer = "";
+    let frameScheduled = false;
+    let pendingAckBytes = 0;
+    const flushFrame = () => {
+      frameScheduled = false;
+      const data = frameBuffer;
+      const bytes = pendingAckBytes;
+      frameBuffer = "";
+      pendingAckBytes = 0;
+      if (!data) return;
       if (!receivedOutput) {
         receivedOutput = true;
         setConnected(true);
       }
-      term.write(data, () => window.minimal.acknowledge(token, data.length));
+      term.write(data, () => window.minimal.acknowledge(token, bytes));
+    };
+    const enqueueWrite = (data: string) => {
+      frameBuffer += data;
+      pendingAckBytes += data.length;
+      if (!frameScheduled) {
+        frameScheduled = true;
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(flushFrame);
+        else setTimeout(flushFrame, 0);
+      }
     };
     const offOutput = window.minimal.onOutput((incoming, data) => {
       if (!token) pending.push([incoming, data]);
-      else if (incoming === token) write(data);
+      else if (incoming === token) enqueueWrite(data);
     });
     const offExit = window.minimal.onExit((incoming) => {
       if (!token) earlyExits.add(incoming);
@@ -82,13 +106,13 @@ export function Terminal({
       }
       queuedInput += data.length;
       inputQueue = inputQueue
-        .then(async () => {
+        .then(() => {
           for (let offset = 0; offset < data.length;) {
             if (disposed) return;
             let end = Math.min(offset + 16384, data.length);
             if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1]))
               end--;
-            await window.minimal.input(token, data.slice(offset, end));
+            window.minimal.input(token, data.slice(offset, end));
             offset = end;
           }
         })
@@ -108,7 +132,9 @@ export function Terminal({
     // instead of executing each newline as Enter or each tab as completion.
     // The wrappers are forwarded byte-for-byte through the PTY; tmux's
     // escape-time (500ms in tmux-engine.ts) reassembles them as a single
-    // sequence even on a busy paste.
+    // sequence even on a busy paste. Single-line content is pasted as-is,
+    // which matches how the renderer used to handle it before this guard
+    // was added.
     const pasteText = () =>
       window.minimal
         .readClipboard()
@@ -157,7 +183,7 @@ export function Terminal({
         }
         token = result;
         for (const [incoming, data] of pending)
-          if (incoming === token) write(data);
+          if (incoming === token) enqueueWrite(data);
         pending = [];
         if (earlyExits.has(token)) {
           setConnected(false);

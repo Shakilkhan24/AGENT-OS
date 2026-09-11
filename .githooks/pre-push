@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Local pre-push gate. Mirrors the "headless" job in .github/workflows/ci.yml
+# (typecheck + backend tests + build) so we catch the same failures before
+# pushing. Playwright e2e is intentionally not run here -- it is slow and
+# requires a display server; CI exercises it on every PR.
+#
+# Set MINIMAL_SKIP_PRE_PUSH=1 to bypass in an emergency.
+set -euo pipefail
+
+if [[ "${MINIMAL_SKIP_PRE_PUSH:-0}" == "1" ]]; then
+  echo "pre-push: skipped (MINIMAL_SKIP_PRE_PUSH=1)"
+  exit 0
+fi
+
+echo "pre-push: running typecheck..."
+npm run typecheck
+
+echo "pre-push: running backend tests..."
+npm test
+
+echo "pre-push: running production build..."
+npm run build
+
+echo "pre-push: ok"

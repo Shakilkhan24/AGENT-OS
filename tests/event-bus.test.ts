@@ -16,6 +16,7 @@ test("event replay is bounded, ordered, durable and never triggers live subscrib
       bus.publish({ type: "engine-restored", sourceId: "tmux", data: {} }),
     ),
   );
+  await bus.flush();
   assert.deepEqual(seen, [1, 2, 3]);
   off();
   const replay = bus.replay(0);

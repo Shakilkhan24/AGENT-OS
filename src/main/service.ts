@@ -51,9 +51,16 @@ export class SessionService {
     this.timer = setInterval(refresh, this.settings.pollIntervalMs); this.timer.unref();
     refresh();
   }
-  close() {
+  /**
+   * Stop background work and flush all pending writes to disk. Always call
+   * before the process exits; otherwise the debounced state and event
+   * journal writes can be lost.
+   */
+  async close() {
     clearInterval(this.timer); this.timer = undefined;
     this.unsubscribe?.(); this.engine.close?.(); this.launches.close();
+    await this.events.close?.();
+    await this.state.store.close();
   }
   snapshot() { return this.reconciliation.snapshot(); }
   async createSession(name: string, directory: string) {
@@ -123,7 +130,7 @@ export class SessionService {
   async requireTerminal(id: string) {
     const terminal = this.state.read().sessions.filter(s => !s.deleting).flatMap(s => s.terminals).find(t => t.id === id && !t.deleting);
     if (!terminal) throw new AppError("NOT_FOUND", "Terminal no longer exists");
-    if (!(await this.engine.inspect()).has(id)) throw new AppError("NOT_FOUND", "This terminal is no longer running. Launch a new terminal to start work.");
+    if (!(await this.reconciliation.cachedInspect()).has(id)) throw new AppError("NOT_FOUND", "This terminal is no longer running. Launch a new terminal to start work.");
     return terminal;
   }
 }

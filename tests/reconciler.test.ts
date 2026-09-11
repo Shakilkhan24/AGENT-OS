@@ -15,6 +15,7 @@ test("engine failures are visible once and recovery persists exit details withou
   pane.dead = true; pane.exitCode = 19; pane.endedAt = new Date().toISOString();
   const snapshot = await f.service.snapshot();
   assert.equal(snapshot.sessions[0].terminals[0].exitCode, 19);
+  await f.service.state.store.flush();
   assert.equal((await f.store.load()).sessions[0].terminals[0].endedAt, pane.endedAt);
   assert.equal(f.service.events.replay(0).events.filter(e => e.type === "engine-restored").length, 1);
 });

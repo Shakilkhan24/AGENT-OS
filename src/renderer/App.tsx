@@ -100,6 +100,11 @@ export function App() {
     [],
   );
   const { snapshot, ready, accept } = useWorkspace(report);
+  // Surface a recovery notice (e.g. malformed state.json) from the main
+  // process through the same toast channel IPC errors use.
+  useEffect(() => {
+    return window.minimal.onStartupRecovered((message) => report(message));
+  }, [report]);
   const session =
     snapshot.sessions.find((s) => s.id === sessionId) || snapshot.sessions[0];
   const terminal =
@@ -173,15 +178,17 @@ export function App() {
         cwd: request.cwd,
         label: request.label,
       };
-      if (launched.terminalIds.length)
+      if (launched.terminalIds.length || launched.launchErrors.length) {
+        // Prefer a failed terminal so the user lands on the surface that
+        // explains the failure ("Could not start this terminal" + reason +
+        // Edit & run hint). Otherwise jump to the newly-launched terminal.
+        const focusId =
+          launched.launchErrors[0]?.terminalId ?? launched.terminalIds.at(-1)!;
         setTerminalIds((ids) => ({
           ...ids,
-          [targetSession]: launched.terminalIds.at(-1)!,
+          [targetSession]: focusId,
         }));
-      if (launched.launchErrors.length)
-        report(
-          `${launched.launchErrors.length} terminal(s) could not start. Select their tabs for details, then use Edit & run to retry.`,
-        );
+      }
     }
   };
   const editAndRun = (item: TerminalView) => {
