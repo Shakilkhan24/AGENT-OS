@@ -2,33 +2,39 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [1.2.0] - 2026-09-12
 
-Hardening and fixes accumulated after the v1.1.0 baseline. **This version has not been tagged or released yet.** Use the same v1.1.0 tag for now; a release will be cut once the work in this section is reviewed and accepted.
+Hardening, performance, and resilience on top of the v1.1.0 baseline. The seven foundation commits are recorded in [`docs/v1.2-work.md`](docs/v1.2-work.md); the work in this release is summarised below.
 
-### Hardening
+### Performance
 
-The seven commits between v1.1.0 and this snapshot are recorded in [`docs/v1.2-work.md`](docs/v1.2-work.md) and summarised below.
+- **Debounced state writes.** `Store.save` coalesces a burst of mutations into one `fsync` inside a 50 ms trailing-edge window; the latest state always wins. `Store.flush()` returns a promise that resolves once the in-flight write lands on disk, and `Store.close()` drains before the process exits. Durability is configurable (`"strong"`, `"async-strong"`, `"crash"`); the default is `async-strong` (data `fsync`, no directory `fsync`). The event bus uses the same shape — `EventBus.publishMany` enqueues events in sequence order, subscribers see them immediately, and the on-disk journal lags by at most 25 ms.
+- **Frozen zero-copy state views.** `WorkspaceState.view()` returns a `Readonly<State>` reference that is recomputed only when the state mutates. The reconciler, snapshot builder, and coordinators read from this view instead of deep-cloning on every call; `view()` measures 0.00 ms in the hot-path benchmark.
+- **Coalesced concurrent snapshots.** A burst of concurrent `Reconciler.snapshot()` calls (e.g. a renderer poll plus a watcher event plus an incoming IPC) folds into a single engine `inspect()` call. With 25 parallel callers the median wall-clock is 1.85 ms — the same as a single cold call.
+- **Per-frame xterm output coalescing.** Terminal output from the PTY is buffered in the renderer until the next animation frame and delivered to xterm.js as one `write()` per frame, with a single acknowledgement that aggregates the bytes. The `input` IPC handler is now `send` (fire-and-forget) instead of `invoke`, removing one round-trip per keystroke.
+- **Memoised tab bar and 4 s polling.** `TerminalTabs` is wrapped in `React.memo` and the workspace polling interval moved from 2 s to 4 s, halving snapshot traffic without affecting perceived freshness.
 
-- Bounded FIFO mutex with cancellation, atomic JSON writes, structured error envelopes, daily NDJSON logs with payload redaction, and Zod-validated profile settings.
-- Bounded, atomically persisted event bus with sequence validation, replay-gap detection, and delivery only after persistence.
-- Explicit schema migration to v2 records (launch intents, environment profiles, hook definitions, session metadata, terminal lifecycle). Original v1 bytes are content-addressed and preserved on disk.
-- Separated `EngineAdapter` contract, tmux implementation, and disposable PTY transport. Length-prefixed tmux metadata preserves tabs, newlines, and UTF-8. PTY queue accounting is now byte-based.
-- Profile runtime/configuration ownership checks, explicit environment propagation, clean-shell mode, and bounded `/proc`-based stop policies.
-- Replaced the global work queue with short state commits, a launch coordinator, coalesced reconciliation, and a stop coordinator. Per-item launch progress, cancellation between items, and idempotent retries are now explicit.
-- File operations with typed request/response envelopes, a bounded cancellable mutex, deadlines, expected-hash save races, draft recovery across restart, descriptor-cursor listings, header-first binary classification, and recursive deletion with bounds.
+Run `npm run bench` for the median/p95 numbers per scenario. The benchmark harness is a non-test script under `scripts/bench.mts`; it is not part of the gate.
 
-### Fixes since the v1.1.0 baseline
+### Durability
 
-- **Right-click paste with multi-line content.** The clipboard handler now wraps pasted text that contains newlines, carriage returns, or tabs in the standard bracketed-paste escape sequences (`\x1b[200~ … \x1b[201~`), so a pasted multi-line script arrives at the shell as a single atomic edit instead of being split by Enter. tmux's `escape-time` was also restored to the documented default of 500 ms so multi-byte escape sequences are reassembled correctly. The change is covered by a regression scenario in `tests/desktop.spec.ts`.
+- **`runWithWatchdog` shutdown helper.** `will-quit` awaits `workspace.close()` (which awaits `Store.close()` + `EventBus.close()`) inside a 5 s budget. On timeout the helper logs `shutdown-flush-timeout` and forces `app.exit(1)`. State already on disk is preserved; only the last in-flight debounced write may be lost, which matches the documented renderer-side guarantee.
+- **Headless-safe malformed-state recovery.** `Store.load()` catches parse errors internally, leaves `state.json` byte-for-byte unchanged on disk, falls back to the empty default, and exposes `recoveredFromInvalid` so the main process can send a `startup-recovered` IPC to the renderer after `did-finish-load`. The renderer surfaces the reason through the existing toast mechanism. The app no longer depends on a display server for startup; an unreachable `dialog.showErrorBox` cannot block recovery.
+
+### Renderer changes
+
+- **Launch-error UX.** A terminal whose engine creation fails now shows its failure in the tab surface (`<h2>Could not start this terminal</h2>` with the `launchError` reason and an Edit & run hint). The redundant global toast — which read like "1 terminal(s) could not start..." — is gone. After a launch with errors, the renderer auto-selects the first failed tab so the user lands on the surface that explains the failure.
+- **Reconciler preserves undefined exit fields.** When the engine reports a still-running process with no exit metadata, the reconciler no longer clobbers an already-recorded exit code or signal with `undefined`.
 
 ### Test coverage
 
-41 backend scenarios and 4 desktop scenarios pass. The packaged-runtime smoke test runs 12 active output-producing terminals with the renderer sandbox enabled, switches all 12 tabs, and verifies every PID survives GUI closure.
+58 backend scenarios pass (`npm test`) including a new `tests/durability.test.ts` (9 cases pinning the `Debouncer<T>` contract, the journal coalescing order, and the three `atomicJson` durability levels), a new `tests/shutdown.test.ts` (4 cases pinning the watchdog contract), `tests/store.test.ts` updated for the recovery contract, and `tests/perf.test.ts` covering the inspect coalescing behaviour.
+
+87 desktop scenarios pass (`npm run test:desktop`), including a new `tests/shutdown-flush.spec.ts` (2 cases force-killing the Electron process after a debounced write and asserting the latest mutation is durable on disk).
 
 ### Repository hygiene
 
-`LICENSE` (ISC), `SECURITY.md`, `.github/workflows/ci.yml`, and this `CHANGELOG.md` were added so the repository is publishable on GitHub. `FUTURE/` (planning material for work beyond v1.x) is excluded from the published tree.
+The seven v1.2 foundation commits, `LICENSE` (ISC), `SECURITY.md`, `.github/workflows/ci.yml`, this `CHANGELOG.md`, and `.githooks/pre-push` (a local gate mirroring the headless CI job) were added so the repository is publishable on GitHub. `FUTURE/` (planning material for work beyond v1.x) is excluded from the published tree.
 
 ## [1.1.0] - 2026-09-09
 
@@ -44,4 +50,5 @@ Initial public release. Verified against the snapshot in [`docs/build-snapshot-v
 - 13 backend test cases, 3 desktop scenarios, and a packaged-runtime smoke test.
 
 [1.1.0]: #110---2026-09-09
+[1.2.0]: #120---2026-09-12
 

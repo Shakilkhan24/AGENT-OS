@@ -1,6 +1,6 @@
 {
   "name": "minimal",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "main": "dist/main/index.cjs",
   "scripts": {
     "build": "node scripts/build.mjs && vite build",
@@ -11,7 +11,10 @@
     "test:desktop": "playwright test",
     "check": "npm run typecheck && npm test && npm run build",
     "package": "npm run build && node scripts/package.mjs",
-    "test:package": "tsx tests/package-smoke.ts"
+    "test:package": "tsx tests/package-smoke.ts",
+    "bench": "tsx scripts/bench.mts",
+    "hooks:install": "node scripts/install-hooks.mjs",
+    "hooks:uninstall": "node scripts/install-hooks.mjs --uninstall"
   },
   "license": "ISC",
   "description": "A local desktop workspace for persistent project sessions, terminals, and scoped files. Built for Linux and WSL2 with WSLg.",
