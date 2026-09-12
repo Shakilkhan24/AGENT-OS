@@ -13,6 +13,8 @@ import { privateConfig, privateDirectory, profilePaths } from "./profile-runtime
 import { TmuxWatcher } from "./tmux-watcher";
 import { stopTerminal, type StopProgress } from "./stop-policy";
 import type { StopPolicy } from "../shared/events";
+import { reapTmuxChildren } from "./tmux-recovery";
+import { log } from "./logging";
 const exec = promisify(execFile);
 export class TmuxEngine implements EngineAdapter {
   readonly capabilities = {id:"tmux",platforms:["linux"],persistent:true,environment:true,pushStatus:true,processTree:true} as const;
@@ -110,7 +112,17 @@ export class TmuxEngine implements EngineAdapter {
     if ((await this.inspect()).size) await this.command("source-file", this.config);
   }
   async inspect(): Promise<Map<string, ProcessInfo>> {
-    try { return parsePanes(await this.execute("list-panes","-a","-F",paneFormat)); }
+    try {
+      const panes = parsePanes(await this.execute("list-panes","-a","-F",paneFormat));
+      try {
+        if (await reapTmuxChildren(panes, async () => Number(await this.command("display-message", "-p", "#{pid}"))))
+          return parsePanes(await this.execute("list-panes", "-a", "-F", paneFormat));
+      } catch (error) {
+        log({ level: "warning", source: "tmux", event: "exit-recovery-failed",
+          fields: { kind: error instanceof Error ? error.name : "unknown" } });
+      }
+      return panes;
+    }
     catch(error) {
       if (error instanceof Error && /no server running|error connecting.*No such file|Connection refused/.test(error.message)) return new Map<string, ProcessInfo>();
       throw error;
