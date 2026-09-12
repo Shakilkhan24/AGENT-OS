@@ -11,8 +11,7 @@ async function launch(data: string) {
   });
 }
 
-async function forceKill(app: Awaited<ReturnType<typeof launch>>) {
-  const child = app.process();
+async function forceKill(app: Awaited<ReturnType<typeof launch>>, child = app.process()) {
   const exited = new Promise<void>(resolve => {
     if (child.exitCode !== null || child.signalCode !== null) resolve();
     else child.once("exit", () => resolve());
@@ -21,6 +20,29 @@ async function forceKill(app: Awaited<ReturnType<typeof launch>>) {
   await exited;
   await app.close().catch(() => {});
 }
+
+test("closing while the renderer is loading exits cleanly", async () => {
+  const base = await mkdtemp(path.join(tmpdir(), "minimal-loading-close-"));
+  const app = await launch(base);
+  const child = app.process();
+  try {
+    const page = await app.firstWindow();
+    await page.waitForLoadState("load");
+    // Trigger quit from navigation itself, without waiting for renderer ready.
+    await app.evaluate(({ app, BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      setTimeout(() => {
+        window.webContents.once("did-start-loading", () => app.quit());
+        window.reload();
+      }, 0);
+    }).catch(() => {}); // Process exit can close the evaluation connection.
+    await expect.poll(() => child.exitCode, { timeout: 10000 }).toBe(0);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) await forceKill(app, child);
+    else await app.close().catch(() => {});
+    await rm(base, { recursive: true, force: true });
+  }
+});
 
 test("settled state survives a force-kill", async () => {
   const base = await mkdtemp(path.join(tmpdir(), "minimal-shutdown-"));

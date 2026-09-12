@@ -99,6 +99,9 @@ test("Custom settings file is honored on the next launch", async () => {
     });
     try {
       const page = await app2.firstWindow();
+      // firstWindow resolves before the renderer finishes loading. Complete the
+      // restart before closing it, so Chromium is not torn down mid-navigation.
+      await page.waitForLoadState("load");
       const live = await page.evaluate(() => window.minimal.getSettings());
       expect(live.gracefulStopMs).toBe(4321);
       expect(live.draftIntervalMs).toBe(200);

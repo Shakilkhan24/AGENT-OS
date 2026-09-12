@@ -29,7 +29,6 @@ let workspace: SessionService | undefined;
 let attachment: Attachment | undefined;
 let attachmentGeneration = 0;
 let quitRequested = false;
-app.on("before-quit", () => { quitRequested = true; });
 const pendingRequests = new Set<Promise<unknown>>();
 const detach = () => {
   attachment?.close();
@@ -285,12 +284,13 @@ else {
 let shuttingDown = false;
 const SHUTDOWN_FLUSH_BUDGET_MS = 5000;
 app.on("window-all-closed", () => app.quit());
-app.on("will-quit", (event) => {
+function flushBeforeQuit(event: Electron.Event) {
   // Flush pending state.json and event-journal writes before the process
   // exits. Without this the debouncer's window can drop the last mutation.
   // The watchdog caps the wait — see src/main/shutdown.ts.
-  if (workspace && !shuttingDown) {
+  if (workspace) {
     event.preventDefault();
+    if (shuttingDown) return;
     shuttingDown = true;
     detach();
     const watchdog = runWithWatchdog(async () => {
@@ -306,4 +306,11 @@ app.on("will-quit", (event) => {
     });
     watchdog.done.then(outcome => app.exit(outcome === "completed" ? 0 : 1));
   }
+}
+app.on("before-quit", event => {
+  quitRequested = true;
+  // Chromium can block window closure during navigation. Drain directly in
+  // that case; before the initial load there is no editor to flush on unload.
+  if (window?.webContents.isLoadingMainFrame()) flushBeforeQuit(event);
 });
+app.on("will-quit", flushBeforeQuit);
