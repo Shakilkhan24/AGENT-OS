@@ -74,7 +74,7 @@ function print(label: string, stat: Stat) {
 
 async function build() {
   const data = await mkdtemp(path.join(tmpdir(), "minimal-perf-"));
-  const store = new Store(data, { debounceMs: 50, durability: "async-strong" });
+  const store = new Store(data);
   await store.load();
   const state = new WorkspaceState(store);
   await state.initialize();
@@ -126,15 +126,15 @@ async function scenario(label: string, fn: () => Promise<void> | void, runs: num
 async function main() {
   const ctx = await build();
   const { data, state, store, reconciler, bus, engine } = ctx;
-  console.log(`\nHot-path benchmark — store:async-strong@50ms, event-bus:async-strong@25ms`);
+  console.log(`\nHot-path benchmark — durable state and events, no artificial debounce delay`);
   console.log(`Seed: 3 sessions × 12 terminals = 36 terminals in workspace.\n`);
 
   // Warm caches.
   await reconciler.snapshot();
   await bus.publishMany([]);
 
-  console.log("--- 1. State mutation throughput (debounced writer) ------------------");
-  await scenario("state.update no-op (deep-clone + freeze + schedule)", async () => {
+  console.log("--- 1. State mutation throughput (durable writer) ------------------");
+  await scenario("state.update no-op (validate + persist + freeze)", async () => {
     await state.update((next) => {
       next.sessions[0].name = next.sessions[0].name;
     });
@@ -164,7 +164,7 @@ async function main() {
     await reconciler.snapshot();
   }, 30);
 
-  console.log("\n--- 3. Renderer burst coalescing --------------------------------------");
+  console.log("\n--- 3. Simulated concurrent snapshot coalescing --------------------------------------");
   // Force fresh inspect each call by waiting for the in-flight promise.
   await scenario("snapshot() × 25 parallel (should fold into ~1 inspect)", async () => {
     await Promise.all(Array.from({ length: 25 }, () => reconciler.snapshot()));
@@ -175,7 +175,7 @@ async function main() {
     await bus.publishMany([]);
   }, 100);
 
-  await scenario("publishMany([evt]) single event (journal coalesced)", async () => {
+  await scenario("publishMany([evt]) single event (durable)", async () => {
     await bus.publish({ type: "engine-restored", sourceId: "engine", data: {} });
   }, 100);
 
@@ -185,7 +185,7 @@ async function main() {
     })));
   }, 60);
 
-  console.log("\n--- 5. End-to-end IPC-style round-trip -------------------------------");
+  console.log("\n--- 5. Simulated lifecycle (no Electron IPC or real tmux) -------------------------------");
   await scenario("createTerminal + snapshot + flush (full lifecycle)", async () => {
     const session = state.view().sessions[0];
     await state.update((next) => {

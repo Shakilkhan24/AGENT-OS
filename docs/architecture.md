@@ -8,7 +8,7 @@ flowchart LR
   Bridge --> IPC[Validated Electron IPC]
   IPC --> Sessions[SessionService]
   Sessions --> Store[Atomic versioned JSON store]
-  Sessions --> Engine[TerminalEngine interface]
+  Sessions --> Engine[EngineAdapter interface]
   Engine --> Tmux[TmuxEngine: private tmux server]
   IPC --> Attach[Disposable PTY client]
   Attach --> Tmux
@@ -18,9 +18,9 @@ flowchart LR
 
 Electron supplies the desktop window and native directory chooser. The renderer is sandboxed, context-isolated, has Node integration disabled, and loads only local production assets with a restrictive Content Security Policy. Navigation, new windows, webviews, and permission requests are denied. Every IPC request validates the sender's exact local main-frame URL; payloads are validated before reaching services. The preload exposes named operations, not generic IPC or filesystem primitives. These choices follow [Electron's security guidance](https://www.electronjs.org/docs/latest/tutorial/security) and [context isolation guidance](https://www.electronjs.org/docs/latest/tutorial/context-isolation).
 
-`SessionService` owns domain state and serializes mutations and reconciliation. `Store` validates a versioned schema and saves using a temporary file, fsync, rename, and directory fsync. State is swapped in memory only after a successful disk commit. Launches write their complete batch intent first, then start processes sequentially. If interrupted, each saved ID is either present in tmux or shown missing. Individual launch failures are recorded while the rest of a batch continues. No command is replayed during recovery. Monotonic snapshot sequence numbers let the renderer reject stale responses; polling never overlaps itself. Engine errors return saved session metadata with unknown terminal status. Deletion uses persisted tombstones, idempotent kills, and durable record removal.
+`SessionService` delegates state commits, launches, stops and reconciliation to separate modules. Only JSON mutations share a commit mutex. `Store` validates a versioned schema and saves using a temporary file, fsync, rename, and directory fsync. State is swapped in memory only after a successful disk commit. Launches write their complete batch intent first, then start processes sequentially. If interrupted, each saved ID is either present in tmux or shown missing. Individual launch failures are recorded while the rest of a batch continues. No command is replayed during recovery. Monotonic snapshot sequence numbers let the renderer reject stale responses; polling never overlaps itself. Engine errors return saved session metadata with unknown terminal status. Deletion uses persisted tombstones, idempotent kills, and durable record removal.
 
-`TerminalEngine` is the only process-management interface. A remote engine can implement this contract later without changing the session store or file panel. The local engine exclusively uses tmux argv calls; there is no interpolated management shell command. A launch command is intentionally user-authored Bash code, passed as one argument to interactive login Bash so normal interactive setup and aliases are available. Presets store the same command data. Each terminal has a dedicated tmux session with a UUID name; a logical project session groups any number of them. This avoids sharing tmux's active-window selection across UI tabs. Empty project sessions remain valid.
+`EngineAdapter` is the only process-management interface. A remote engine can implement this contract later without changing the session store or file panel. The local engine exclusively uses tmux argv calls; there is no interpolated management shell command. A launch command is intentionally user-authored Bash code, passed as one argument to interactive login Bash so normal interactive setup and aliases are available. Presets store the same command data. Each terminal has a dedicated tmux session with a UUID name; a logical project session groups any number of them. This avoids sharing tmux's active-window selection across UI tabs. Empty project sessions remain valid.
 
 tmux owns the PTYs and surviving processes. Its private socket and generated configuration isolate the app from a user's tmux settings. `remain-on-exit` is configured before the first terminal starts, preserving even immediately exiting processes. See tmux's [Getting Started](https://github.com/tmux/tmux/wiki/Getting-Started) and [Advanced Use](https://github.com/tmux/tmux/wiki/Advanced-Use) documentation for lifecycle behavior.
 
@@ -32,12 +32,12 @@ On WSL's Windows filesystem, `RENAME_NOREPLACE` is unavailable. The provider exc
 
 Before spawning tmux or a terminal client, Python closes inherited nonstandard descriptors. Electron can otherwise leak private sockets into a detached tmux server, preventing an automation or parent process from observing the GUI's complete shutdown. The desktop close/reopen test exercises this boundary.
 
-The renderer separates command entry (`LaunchDialog`), scrollable tabs and fixed add control (`TerminalTabs`), snapshot sequencing (`useWorkspace`), and the attached terminal (`Terminal`). Selected tabs and explorer visibility live in local presentation storage. The existing preset-based launch API delegates to the unified launch operation. Optional failure metadata is compatible with existing version-1 state files.
+The renderer separates command entry (`LaunchDialog`), scrollable tabs and fixed add control (`TerminalTabs`), snapshot sequencing (`useWorkspace`), and the attached terminal (`Terminal`). Selected tabs and explorer visibility live in local presentation storage. The existing preset-based launch API delegates to the unified launch operation. Version-1 state migrates to version 2 with a preserved backup. Settings, drafts, environment profiles and event records are validated; full versioned Electron IPC remains planned.
 
 ## Future changes
 
 - Layout state belongs in a renderer/domain presentation model. Process identities already exist independently of rendered tabs.
-- Remote sessions can add another `TerminalEngine` and filesystem provider, with a transport identifier added in a schema migration.
+- Remote sessions can add another `EngineAdapter` and filesystem provider, with a transport identifier added in a schema migration.
 - Richer file operations belong in the filesystem provider and typed request schema, keeping containment enforcement centralized.
 - Collaboration needs an explicit authorization and ownership model at the service boundary; this local v1 has no multi-user transport.
 - Changes to persistent structure require an explicit versioned migration. Do not reinterpret old fields or discard invalid data.
@@ -51,3 +51,5 @@ The renderer separates command entry (`LaunchDialog`), scrollable tabs and fixed
 - File worker stops: pending operations reject. The next operation starts a fresh worker and re-registers roots with their saved identities. Uncertain mutations are not automatically replayed. Work in tmux is unaffected.
 - Directory disappears, becomes inaccessible, or is replaced: the file panel reports the failure rather than silently rebinding it.
 - Save fails or JSON is corrupt: preserve existing data, report the error, and avoid launching unrecorded processes.
+
+Exit polling can recover a missed tmux child notification: it verifies a zombie pane belongs to the same-user private server and signals that server with SIGCHLD. tmux then records the actual exit status and fires its hook. This is best-effort process accounting, not a synthetic exit code. See the [tmux 3.4 child handler](https://github.com/tmux/tmux/blob/3.4/server.c#L434) for the underlying reap operation.

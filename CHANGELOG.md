@@ -2,6 +2,22 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-09-13
+
+Bug-fix baseline after the [source review](docs/review-2026-09-12.md).
+
+- Serialize active writes and drain them during shutdown; surface persistence failures.
+- Commit validated state only after disk success. Restore data and directory fsync by default; remove the fixed 50 ms save delay.
+- Preserve corrupt/unsupported state in a durable recovery copy before allowing edits; make the recovery notice available after renderer startup.
+- Restore acknowledged, bounded terminal input; correct UTF-8 output accounting and multiline paste; cancel disposed rendering callbacks.
+- Drain accepted IPC and active launch work before closing storage. Report failed shutdown separately from success.
+- Drain shutdown before closing a loading renderer; prevent repeated quit requests from bypassing the drain. Suppress expected load-abort dialogs and dispose restarted test applications completely.
+- Recover unreaped tmux pane exits during polling without signalling terminal jobs or fabricating exit codes.
+- Strengthen tests to verify actual command output, durable saves, recovery copies, write ordering and cancellation.
+- Correct unsupported completion claims and align package/lockfile versions. See the [current baseline](docs/build-snapshot-v1.2.1.md) for verification and remaining scope.
+
+The 1.2.0 notes below are historical; their durability/performance guarantees were not all supported by the implementation.
+
 ## [1.2.0] - 2026-09-12
 
 Hardening, performance, and resilience on top of the v1.1.0 baseline. The seven foundation commits are recorded in [`docs/v1.2-work.md`](docs/v1.2-work.md); the work in this release is summarised below.
@@ -52,3 +68,5 @@ Initial public release. Verified against the snapshot in [`docs/build-snapshot-v
 [1.1.0]: #110---2026-09-09
 [1.2.0]: #120---2026-09-12
 
+
+[1.2.1]: #121---2026-09-12

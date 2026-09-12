@@ -1,6 +1,22 @@
-# v1.1 verification
+# Verification — v1.2.1
 
-The acceptance criteria come from the original [ins.md](../ins.md). Tests use real tmux processes, actual filesystem operations, and Electron on the WSLg desktop. Fault-recovery tests additionally inject a single engine failure or stop a disposable helper.
+Verified on 2026-09-13: 73 backend cases, 89 desktop cases, typechecking, production build and packaged-runtime smoke pass. The desktop runner exits successfully with no teardown timeout. Twenty fresh-server exit-recovery trials also passed.
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | 73 backend cases, typecheck and build passed |
+| `npm run test:desktop -- --workers=2` | 89 passed in 6.7 minutes on a private Xvfb display; exit 0 |
+| `npm run package` | Standalone Linux package built successfully |
+| `npm run test:package` | Sandboxed renderer; 12 output-producing terminals; clean GUI exit; every process survives |
+| Release metadata | Application, lockfile and packaged manifest all report 1.2.1 |
+
+Focused regressions cover blocked and reordered writes, failed-save visibility, malformed/future-schema recovery backups, failed event publication, pending-launch shutdown, quitting during renderer loading, multiline paste execution and sustained Unicode output. The loading-close and settings-restart checks each passed three consecutive runs. These assertions check resulting state or command output rather than only echoed input.
+
+Microbenchmark on this WSL host: state mutation p95 11.14 ms (review baseline 56.70 ms); durable single-event publication p95 12.42 ms; 25 concurrent simulated snapshots p95 2.15 ms. The benchmark uses 36 fake terminals. It does not certify real first-prompt latency or the original 128-terminal and warm-tab-switch budgets. The final packaged smoke switched 12 real terminal tabs in 1,549 ms total; that is a broad regression check, not a per-switch p95 measurement.
+
+The original requirement mapping below is retained for orientation. Feature availability is defined by the [current snapshot](build-snapshot-v1.2.1.md), not by historical release claims.
+
+The acceptance criteria come from the original [ins.md](../ins.md). Tests use real tmux processes, actual filesystem operations, and Electron on WSLg or a private Xvfb display. Fault-recovery tests additionally inject a single engine failure or stop a disposable helper.
 
 | Requirement                                              | Implementation and verification                                                                                                                                                                                                                                  |
 | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -15,7 +31,7 @@ The acceptance criteria come from the original [ins.md](../ins.md). Tests use re
 | Scoped filesystem access                                 | Tests reject absolute paths, parent traversal, symlink escapes, hard-linked file access, root mutation, and replacement of the bound directory. Linux openat2 additionally prohibits mounted subtrees and magic links.                                           |
 | Survive GUI close/reopen                                 | Desktop test closes Electron, inspects surviving tmux processes, relaunches the app, and asserts identical PIDs.                                                                                                                                                 |
 | Reconcile actual running state                           | Fast-exit test preserves exit code 7 and proves a command is not rerun. A killed terminal becomes missing. Interrupted launch intents and deletion tombstones are recovered using real saved state.                                                              |
-| Auditable control interface                              | `TerminalEngine` is the only session/process control interface. All tmux execution and attachments live in `TmuxEngine` and its private helpers.                                                                                                                 |
+| Auditable control interface                              | `EngineAdapter` is the only session/process control interface. All tmux execution and attachments live in `TmuxEngine` and its private helpers.                                                                                                                 |
 | Modular, extensible foundation                           | Separate typed UI bridge, domain service, store, engine, filesystem provider, and renderer modules. [Architecture](architecture.md) describes extension boundaries.                                                                                              |
 | Responsive with 10+ background sessions/terminals        | Tests run twelve workers in one session and twelve independent sessions; validate distinct live processes, bounded snapshot latency, and concurrent file listing. Inactive terminals have no renderer clients.                                                   |
 | Working desktop deliverable                              | Production build and Electron UI test, plus a standalone packaged application directory. [desktop.png](desktop.png) captures the running app.                                                                                                                    |

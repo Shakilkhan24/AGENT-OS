@@ -11,15 +11,15 @@ The implementation enforces several specific boundaries; it does not enforce oth
 - **Renderer is sandboxed.** Node integration is disabled, context isolation is enabled, web security is enabled, navigation is denied, new windows and webviews are denied, and permission requests are denied.
 - **Local Content Security Policy.** The renderer CSP includes `connect-src 'none'`, blocking all renderer-initiated network connections.
 - **Exact main-frame sender validation.** IPC handlers verify the sender is the application's own main frame before processing requests.
-- **Payload validation.** Every IPC request is validated by a Zod schema; unexpected payloads produce a typed validation error rather than falling back to permissive defaults.
-- **Private tmux server.** A dedicated tmux configuration and socket live under `/tmp/minimal-<uid>/`. Socket directory ownership and permissions are checked at startup. tmux's mouse-driven context menu (the "Horizontal Split / Vertical Split" overlay) is unbound (`bind -n MouseDown3Pane none`) so right-click is handled by the renderer, not by tmux. Ordinary user tmux sessions and configuration are unaffected.
+- **Payload validation.** Service inputs are validated with Zod. File-worker envelopes and responses are versioned and validated. Electron IPC does not yet have a complete version handshake or validated response envelopes.
+- **Private tmux server.** A dedicated tmux configuration and socket live under `/tmp/minimal-<uid>/`. Socket directory ownership and permissions are checked at startup. tmux's mouse-driven context menu (the "Horizontal Split / Vertical Split" overlay) is unbound so right-click is handled by the renderer, not by tmux. Ordinary user tmux sessions and configuration are unaffected.
 - **Pinned file-root descriptors.** File operations hold pinned directory descriptors; the file panel rejects root mutation, traversal, symlink escapes, hard-linked files, mounted subtrees, magic links, and FIFO/special files. Linux `openat2` is the underlying primitive on supported kernels.
-- **Atomic text replacement.** Writes use temp + fsync + rename + directory-fsync; destination collisions are rejected rather than overwritten.
-- **Process spawning via argv.** tmux management operations use a fixed argv path (`python3 helpers/exec_clean.py tmux …`); user-authored command text executes through Bash as the command payload, not as a tmux argv element.
+- **Atomic text replacement.** Editor saves check the opening hash before temp-file replacement. Move/create destination collisions are rejected. Non-cooperating external writers can still race the final hash check and rename.
+- **Process spawning via argv.** tmux management operations use an argument array (`python3 helpers/exec_clean.py tmux …`); user-authored launch commands are intentionally executed by Bash.
 - **Inherited descriptor cleanup.** Python helpers close inherited nonstandard file descriptors before tmux operations.
 - **Expected-hash on save.** File saves carry the opening hash and recheck the path immediately before atomic replacement; external modifications are surfaced rather than silently overwritten.
-- **Bounded queues and budgets.** Input, output, and Python-helper queues have explicit byte/string budgets; exhaustion pauses rather than crashes.
-- **Daily rotating logs with redaction.** Logs are NDJSON, scrub paths/hostnames/environment variables/secret references, and rotate by day.
+- **Bounded queues and budgets.** Input, output, and Python-helper queues have explicit byte/string budgets; output pressure pauses reading; input exhaustion rejects the request and surfaces an error.
+- **Daily rotating logs with redaction.** Logs are NDJSON and rotate by day. Sensitive payload keys are redacted; this is not a blanket guarantee that all paths or secrets in arbitrary messages are removed.
 
 ## Boundaries that are out of scope
 
@@ -52,4 +52,4 @@ You should expect an acknowledgement within seven days. The maintainer will coor
 | 1.1.x   | Critical fixes only |
 | Earlier  | No        |
 
-The current release is `1.2.0`. Backports to `1.1.x` are considered for boundary violations only; feature work goes onto the next minor version.
+The current release is `1.2.1`. Backports to `1.1.x` are considered for boundary violations only; feature work goes onto the next minor version.
