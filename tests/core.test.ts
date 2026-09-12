@@ -125,7 +125,7 @@ test("PTY attachment supports input, Unicode, resize, and leaves the process ali
     24,
     (_token, data) => {
       output += data;
-      attachment.acknowledge(data.length);
+      attachment.acknowledge(Buffer.byteLength(data));
     },
     () => {
       exited = true;
@@ -144,9 +144,10 @@ test("PTY attachment supports input, Unicode, resize, and leaves the process ali
   // Python helper, so we round-trip a no-op command and only proceed once
   // its output has been echoed back. If the bridge never resizes, the
   // subsequent `stty size` reports the old dimensions and the assertion
-  // below never matches.
+  // below never matches. Send an actual Enter and split the marker so
+  // matching echoed input cannot be mistaken for command execution.
   attachment.resize(101, 31);
-  await attachment.input("printf __RESIZE_OK__\\n");
+  await attachment.input("printf '__RESIZE'; printf '_OK__\\n'\r");
   for (let i = 0; i < 80 && !output.includes("__RESIZE_OK__"); i++) await delay(50);
   // Give tmux a chance to round-trip the SIGWINCH to the pane.
   for (let i = 0; i < 40 && !output.includes("$"); i++) await delay(50);

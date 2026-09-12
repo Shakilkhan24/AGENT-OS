@@ -185,22 +185,10 @@ else {
       handle("detach", (token) => {
         if (attachment?.token === id.parse(token)) detach();
       });
-      ipcMain.on("input", (event, token, data) => {
-        try {
-          trusted(event);
-          if (attachment?.token !== id.parse(token)) return;
-          attachment.input(z.string().max(65536).parse(data));
-        } catch (error) {
-          log({
-            level: "warning",
-            source: "ipc",
-            event: "message-rejected",
-            fields: {
-              channel: "input",
-              kind: error instanceof Error ? error.name : "unknown",
-            },
-          });
-        }
+      handle("startup-recovery", () => store.recoveredFromInvalid ?? null);
+      handle("input", (token, data) => {
+        if (attachment?.token !== id.parse(token)) throw new Error("Terminal selection changed; input was cancelled");
+        return attachment.input(z.string().max(65536).parse(data));
       });
       for (const channel of ["resize", "acknowledge"])
         ipcMain.on(channel, (event, token, first, second) => {
@@ -259,18 +247,14 @@ else {
         window = undefined;
       });
       // If `Store.load()` couldn't parse the existing state.json, it
-      // preserves the file and falls back to the empty default. Surface
-      // the reason to the renderer once the window has finished loading.
+      // backs up the file and falls back to the empty default. The preload
+      // queries the recovery notice after subscribing, avoiding a load race.
       if (store.recoveredFromInvalid) {
         log({
           level: "warning",
           source: "application",
           event: "state-recovered",
           fields: { message: store.recoveredFromInvalid },
-        });
-        const message = store.recoveredFromInvalid;
-        window.webContents.once("did-finish-load", () => {
-          window?.webContents.send("startup-recovered", message);
         });
       }
       await window.loadFile(location);

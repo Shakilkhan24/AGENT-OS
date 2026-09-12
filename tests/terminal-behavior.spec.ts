@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { TmuxEngine } from "../src/main/engine";
@@ -230,27 +230,35 @@ test("Ctrl+Shift+V with single-line clipboard content pastes cleanly", async () 
   }
 });
 
-test("Multi-line right-click paste reaches Bash as a single bracketed paste", async () => {
-  const ctx = await boot();
-  const { app, page, errors, teardown } = ctx;
+test("Multi-line right-click paste executes both commands without control markers", async () => {
+  const { root, app, page, errors, teardown } = await boot();
   try {
     await app.evaluate(({ clipboard }) => {
-      clipboard.readText = async () => "printf 'rc-line1\\nrc-line2\\n'";
+      clipboard.readText = async () => "printf FIRST > first.txt\nprintf SECOND > second.txt";
     });
     await page.locator(".xterm-helper-textarea").focus();
     await page.evaluate(() => {
-      const el = document.querySelector("[data-testid='terminal-surface']");
-      el?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      document.querySelector("[data-testid='terminal-surface']")?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
     });
-    // The shell echoes the literal command on a single edit buffer; the actual
-    // output arrives after Enter.
-    await expect(page.locator(".xterm-rows")).toContainText("rc-line1");
+    await expect(page.locator(".xterm-rows")).toContainText("second.txt");
     await page.keyboard.press("Enter");
-    await expect(page.locator(".xterm-rows")).toContainText("rc-line2");
+    await expect.poll(() => readFile(path.join(root, "first.txt"), "utf8").catch(() => null)).toBe("FIRST");
+    await expect.poll(() => readFile(path.join(root, "second.txt"), "utf8").catch(() => null)).toBe("SECOND");
     expect(errors).toEqual([]);
-  } finally {
-    await teardown();
-  }
+  } finally { await teardown(); }
+});
+
+test("Heavy Unicode output finishes and subsequent terminal input still executes", async () => {
+  const { root, page, errors, teardown } = await boot();
+  try {
+    await writeFile(path.join(root, "unicode.py"), "import sys\nsys.stdout.write(('λ'*1024+'\\n')*500)\nprint('UNICODE_DONE')\n");
+    await page.keyboard.type("python3 unicode.py"); await page.keyboard.press("Enter");
+    await expect(page.locator(".xterm-rows")).toContainText("UNICODE_DONE", { timeout: 15000 });
+    await page.keyboard.type("printf ALIVE > alive.txt"); await page.keyboard.press("Enter");
+    await expect.poll(() => readFile(path.join(root, "alive.txt"), "utf8").catch(() => null)).toBe("ALIVE");
+    expect(errors).toEqual([]);
+  } finally { await teardown(); }
 });
 
 test("Single-line right-click paste works the same as typing", async () => {

@@ -3,6 +3,7 @@ import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalView } from "../shared/types";
+import { TerminalInputQueue, utf8Bytes } from "../shared/terminal-flow";
 export function Terminal({
   terminal,
   report,
@@ -22,8 +23,7 @@ export function Terminal({
     let pending: [string, string][] = [];
     const earlyExits = new Set<string>();
     let receivedOutput = false;
-    let inputQueue = Promise.resolve();
-    let queuedInput = 0;
+    const input = new TerminalInputQueue(data => window.minimal.input(token, data));
     const term = new Xterm({
       cursorBlink: true,
       fontFamily: '"DejaVu Sans Mono", "Cascadia Code", monospace',
@@ -54,13 +54,13 @@ export function Terminal({
     // per second, but each one schedules a render. On burst output (e.g.
     // `cat`-ing a 200 KB file) we can receive dozens of IPC chunks in a
     // single animation frame; queue them and flush once per rAF instead of
-    // paying the cost on every chunk. Single-chunk writes (the common case
-    // for live typing) still flush immediately.
+    // paying the cost on every chunk. All chunks flush on the next frame.
     let frameBuffer = "";
-    let frameScheduled = false;
+    let outputFrame = 0;
     let pendingAckBytes = 0;
     const flushFrame = () => {
-      frameScheduled = false;
+      outputFrame = 0;
+      if (disposed) return;
       const data = frameBuffer;
       const bytes = pendingAckBytes;
       frameBuffer = "";
@@ -74,12 +74,8 @@ export function Terminal({
     };
     const enqueueWrite = (data: string) => {
       frameBuffer += data;
-      pendingAckBytes += data.length;
-      if (!frameScheduled) {
-        frameScheduled = true;
-        if (typeof requestAnimationFrame === "function") requestAnimationFrame(flushFrame);
-        else setTimeout(flushFrame, 0);
-      }
+      pendingAckBytes += utf8Bytes(data);
+      if (!outputFrame) outputFrame = requestAnimationFrame(flushFrame);
     };
     const offOutput = window.minimal.onOutput((incoming, data) => {
       if (!token) pending.push([incoming, data]);
@@ -96,55 +92,20 @@ export function Terminal({
     });
     const onData = term.onData((data) => {
       if (!token || disposed) return;
-      if (queuedInput + data.length > 2 * 1024 * 1024) {
-        report(
-          new Error(
-            "Paste is too large or input is busy. Wait, then paste a smaller selection.",
-          ),
-        );
-        return;
-      }
-      queuedInput += data.length;
-      inputQueue = inputQueue
-        .then(() => {
-          for (let offset = 0; offset < data.length;) {
-            if (disposed) return;
-            let end = Math.min(offset + 16384, data.length);
-            if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1]))
-              end--;
-            window.minimal.input(token, data.slice(offset, end));
-            offset = end;
-          }
-        })
+      void input.enqueue(data)
         .catch((error) => {
           if (!disposed) report(error);
-        })
-        .finally(() => {
-          queuedInput -= data.length;
         });
     });
     const copy = () =>
       window.minimal.writeClipboard(term.getSelection()).catch(report);
-    // Paste the clipboard contents. Text that contains newlines, carriage
-    // returns or tabs is wrapped in the standard bracketed-paste escape
-    // sequences (\x1b[200~ ... \x1b[201~) so the receiving program (Bash's
-    // readline, an editor, etc.) treats the paste as a single atomic edit
-    // instead of executing each newline as Enter or each tab as completion.
-    // The wrappers are forwarded byte-for-byte through the PTY; tmux's
-    // escape-time (500ms in tmux-engine.ts) reassembles them as a single
-    // sequence even on a busy paste. Single-line content is pasted as-is,
-    // which matches how the renderer used to handle it before this guard
-    // was added.
+    // xterm normalizes line endings and handles the application's paste mode.
     const pasteText = () =>
       window.minimal
         .readClipboard()
         .then((text) => {
           if (disposed || !text) return;
-          if (text.includes("\n") || text.includes("\r") || text.includes("\t")) {
-            term.paste(`\x1b[200~${text}\x1b[201~`);
-          } else {
-            term.paste(text);
-          }
+          term.paste(text);
         })
         .catch(report);
     term.attachCustomKeyEventHandler((event) => {
@@ -178,7 +139,7 @@ export function Terminal({
       .attach(terminal.id, term.cols, term.rows)
       .then((result) => {
         if (disposed) {
-          void window.minimal.detach(result);
+          void window.minimal.detach(result).catch(() => {});
           return;
         }
         token = result;
@@ -212,14 +173,16 @@ export function Terminal({
     element.addEventListener("contextmenu", onContextMenu);
     return () => {
       disposed = true;
+      input.cancel();
       setConnected(false);
       observer.disconnect();
       cancelAnimationFrame(resizeFrame);
+      cancelAnimationFrame(outputFrame);
       offOutput();
       offExit();
       onData.dispose();
       element.removeEventListener("contextmenu", onContextMenu);
-      if (token) void window.minimal.detach(token);
+      if (token) void window.minimal.detach(token).catch(report);
       term.dispose();
     };
   }, [terminal.id, terminal.status === "missing", attempt]);
