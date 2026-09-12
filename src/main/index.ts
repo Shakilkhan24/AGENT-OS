@@ -28,6 +28,7 @@ let filesystem: SessionFilesystem | undefined;
 let workspace: SessionService | undefined;
 let attachment: Attachment | undefined;
 let attachmentGeneration = 0;
+const pendingRequests = new Set<Promise<unknown>>();
 const detach = () => {
   attachment?.close();
   attachment = undefined;
@@ -98,7 +99,10 @@ else {
       const handle = (channel: string, callback: (...args: any[]) => any) =>
         ipcMain.handle(channel, (event, ...args) => {
           trusted(event);
-          return callback(...args);
+          if (shuttingDown) throw new Error("The workspace is closing");
+          const pending = Promise.resolve().then(() => callback(...args));
+          pendingRequests.add(pending);
+          return pending.finally(() => pendingRequests.delete(pending));
         });
       handle("snapshot", () => service.snapshot());
       handle("get-settings", () => settings);
@@ -285,12 +289,16 @@ app.on("will-quit", (event) => {
     shuttingDown = true;
     detach();
     const watchdog = runWithWatchdog(async () => {
+      const launches = workspace!.launches.close();
+      const pending = await Promise.allSettled([launches, ...pendingRequests]);
+      const services = await Promise.allSettled([workspace!.close()]);
       await filesystem?.close();
-      await workspace!.close();
+      const failure = [...pending, ...services].find(result => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
     }, {
       budgetMs: SHUTDOWN_FLUSH_BUDGET_MS,
       onTimeout: () => app.exit(1),
     });
-    watchdog.done.then(() => app.exit(0));
+    watchdog.done.then(outcome => app.exit(outcome === "completed" ? 0 : 1));
   }
 });

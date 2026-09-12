@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { deferred, serviceFixture } from "./support";
 import { SessionService } from "../src/main/service";
+import { setImmediate } from "node:timers/promises";
+import { Store } from "../src/main/store";
+import { EventBus } from "../src/main/event-bus";
 
 test("a blocked batch streams intent, deduplicates and cancels between items without blocking metadata", { timeout: 10000 }, async (t) => {
   const f = await serviceFixture(); t.after(f.cleanup);
@@ -27,6 +30,25 @@ test("a blocked batch streams intent, deduplicates and cancels between items wit
   const reopened = new SessionService(f.store, f.engine, f.files); await reopened.initialize();
   assert.equal((await reopened.beginLaunch(f.session.id, request)).id, launch.id);
   assert.equal(f.engine.created.length, 1);
+});
+
+test("shutdown waits for the started item and persists cancellation before closing writers", async (t) => {
+  const f = await serviceFixture(); t.after(f.cleanup);
+  const entered = deferred(), release = deferred(); t.after(release.resolve);
+  f.engine.beforeCreate = async () => { entered.resolve(); await release.promise; };
+  const record = await f.service.beginLaunch(f.session.id, { command: "worker", count: 3 });
+  await entered.promise;
+  let closed = false;
+  const closing = f.service.close().then(() => { closed = true; });
+  await setImmediate(); assert.equal(closed, false);
+  release.resolve(); await closing;
+  const recovered = await new Store(f.store.directory).load();
+  assert.equal(recovered.launches.find(item => item.id === record.id)?.state, "cancelled");
+  assert.equal(f.engine.created.length, 1);
+  assert.equal(f.engine.removed.length, 0);
+  const journal = new EventBus(f.store.directory); await journal.initialize();
+  assert.ok(journal.replay(0).events.some(event => event.type === "launch-progress" && event.data.state === "cancelled"));
+  await journal.close();
 });
 
 test("crash recovery never replays unfinished launches and retains an already created process", async (t) => {

@@ -58,9 +58,12 @@ export class SessionService {
    */
   async close() {
     clearInterval(this.timer); this.timer = undefined;
-    this.unsubscribe?.(); this.engine.close?.(); this.launches.close();
-    await this.events.close?.();
-    await this.state.store.close();
+    this.unsubscribe?.(); this.engine.close?.();
+    const launches = await Promise.allSettled([this.launches.close()]);
+    await this.reconciliation.drain();
+    const writes = await Promise.allSettled([this.events.close(), this.state.store.close()]);
+    const failure = [...launches, ...writes].find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
   }
   snapshot() { return this.reconciliation.snapshot(); }
   async createSession(name: string, directory: string) {

@@ -1,23 +1,11 @@
-/**
- * Shutdown flush watchdog.
- *
- * The Electron `will-quit` handler awaits a debounced flush of state.json
- * and the event journal. A hung fsync (full disk, wedged I/O) would
- * otherwise hang the whole shutdown — so we race the close against a
- * timeout. On timeout we log and force-exit; state already on disk is
- * preserved, only the last in-flight debounced write may be lost. That's
- * the same guarantee the renderer sees in normal operation.
- *
- * Pure helper — extracted so the timeout + force-exit behaviour is unit
- * testable without spinning up Electron.
- */
+/** Bounded shutdown: drain accepted operations, report failures, preserve tmux work. */
 import { log } from "./logging";
 
 export interface ShutdownWatchdog {
   /** Cancel the watchdog (call when close() resolves normally). */
   cancel(): void;
   /** Resolves when the close completes or the watchdog trips. */
-  done: Promise<"completed" | "timed-out">;
+  done: Promise<"completed" | "failed" | "timed-out" | "cancelled">;
 }
 
 export interface ShutdownWatchdogOptions {
@@ -34,8 +22,8 @@ export function runWithWatchdog(
   options: ShutdownWatchdogOptions,
 ): ShutdownWatchdog {
   let settled = false;
-  let resolveDone!: (result: "completed" | "timed-out") => void;
-  const done = new Promise<"completed" | "timed-out">((resolve) => {
+  let resolveDone!: (result: "completed" | "failed" | "timed-out" | "cancelled") => void;
+  const done = new Promise<"completed" | "failed" | "timed-out" | "cancelled">((resolve) => {
     resolveDone = resolve;
   });
   const emit = options.log ?? log;
@@ -50,8 +38,10 @@ export function runWithWatchdog(
     });
     try { options.onTimeout(); } finally { resolveDone("timed-out"); }
   }, options.budgetMs);
-  work()
+  let outcome: "completed" | "failed" = "completed";
+  Promise.resolve().then(work)
     .catch((error) => {
+      outcome = "failed";
       emit({
         level: "error",
         source: "application",
@@ -60,12 +50,13 @@ export function runWithWatchdog(
       });
     })
     .finally(() => {
+      if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolveDone("completed");
+      resolveDone(outcome);
     });
   return {
-    cancel() { if (!settled) { settled = true; clearTimeout(timer); } },
+    cancel() { if (!settled) { settled = true; clearTimeout(timer); resolveDone("cancelled"); } },
     done,
   };
 }

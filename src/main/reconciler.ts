@@ -14,6 +14,7 @@ export class Reconciler {
   private signatures = new Map<string, string>();
   private failure?: Failure;
   private prompts = new Set<string>();
+  private refreshes = new Set<Promise<void>>();
   constructor(private state: WorkspaceState, private engine: EngineAdapter, private events: EventBus) {}
   invalidate() { this.generation++; }
   prompt(id: string, ready: boolean) { if (ready) this.prompts.add(id); else this.prompts.delete(id); }
@@ -90,7 +91,11 @@ export class Reconciler {
     if (!this.pending || this.pending.generation !== this.generation) {
       const pending = { generation: this.generation, promise: this.refresh(this.generation) };
       this.pending = pending;
-      void pending.promise.finally(() => { if (this.pending === pending) this.pending = undefined; }).catch(() => {});
+      this.refreshes.add(pending.promise);
+      void pending.promise.finally(() => {
+        this.refreshes.delete(pending.promise);
+        if (this.pending === pending) this.pending = undefined;
+      }).catch(() => {});
     }
     await this.pending.promise;
     // Use the frozen view for read-only consumers; the snapshot is a fresh
@@ -104,4 +109,5 @@ export class Reconciler {
           exitCode: live?.exitCode ?? terminal.exitCode, exitSignal: live?.exitSignal ?? terminal.exitSignal };
       }) })) };
   }
+  async drain() { await Promise.allSettled(this.refreshes); }
 }
