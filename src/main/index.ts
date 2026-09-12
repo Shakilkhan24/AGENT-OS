@@ -28,6 +28,8 @@ let filesystem: SessionFilesystem | undefined;
 let workspace: SessionService | undefined;
 let attachment: Attachment | undefined;
 let attachmentGeneration = 0;
+let quitRequested = false;
+app.on("before-quit", () => { quitRequested = true; });
 const pendingRequests = new Set<Promise<unknown>>();
 const detach = () => {
   attachment?.close();
@@ -264,6 +266,9 @@ else {
       await window.loadFile(location);
     })
     .catch((error) => {
+      // Closing during the initial page load aborts loadFile. A modal startup
+      // error here would interrupt the shutdown already requested by the user.
+      if (quitRequested) return;
       log({
         level: "error",
         source: "application",
