@@ -132,10 +132,15 @@ test("PTY attachment supports input, Unicode, resize, and leaves the process ali
     },
   );
   t.after(() => attachment.close());
-  await delay(200);
+  // Wait for the shell prompt to appear before resizing. The bridge has to
+  // fork the PTY, exec tmux, attach the session, and have bash print its
+  // PS1 before TIOCSWINSZ has anything to act on. A busy CI runner can
+  // take longer than the historical 200 ms ceiling, so we poll for the
+  // prompt instead of using a fixed delay.
+  for (let i = 0; i < 60 && !output.includes("$"); i++) await delay(50);
   attachment.resize(101, 31);
   await attachment.input("printf 'UNICODE-λ-✓\\n'; stty size\r");
-  for (let i = 0; i < 40 && !output.includes("31 101"); i++) await delay(50);
+  for (let i = 0; i < 80 && !output.includes("31 101"); i++) await delay(50);
   assert.match(output, /UNICODE-λ-✓/);
   assert.match(output, /31 101/);
   assert.equal(exited, false);
@@ -158,12 +163,13 @@ test("a fast command retains its exit code and is never rerun after restart", as
   // Wait for the engine to populate the exit code. tmux sometimes hands us
   // `dead=1` before `pane_dead_status` fills in (a known gap when the OS is
   // busy reaping), so we keep polling until both arrive together. The
-  // 5s ceiling is comfortably above the worst observed wall-clock on a
-  // loaded CI runner.
+  // 15 s ceiling is comfortably above the worst observed wall-clock on a
+  // loaded CI runner where the first ever `tmux -L <profile> start-server`
+  // has to fork, exec, and wire up its socket before any work begins.
   let terminal: import("../src/shared/types").TerminalView | undefined;
   let snapshot = await f.service.snapshot();
   let engineInfo = (await f.engine.inspect()).get(snapshot.sessions[0].terminals[0].id);
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 300; i++) {
     if (engineInfo?.dead && engineInfo.exitCode !== undefined) break;
     await delay(50);
     snapshot = await f.service.snapshot();

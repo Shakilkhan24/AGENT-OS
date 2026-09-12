@@ -41,7 +41,13 @@ test("timed out workers are replaced and cancellation never automatically retrie
   const f = await serviceFixture(); t.after(f.cleanup);
   const helper = path.join(f.base, "slow.py"), marker = path.join(f.base, "attempted");
   await writeFile(helper, `import sys, json, time, pathlib, runpy\nsys.path.insert(0, ${JSON.stringify(path.resolve("helpers"))})\noriginal = sys.stdin\ndef requests():\n    for line in original:\n        req = json.loads(line)\n        marker = pathlib.Path(${JSON.stringify(marker)})\n        if req['action'] == 'list' and not marker.exists():\n            marker.touch()\n            time.sleep(10)\n        yield line\nsys.stdin = requests()\nrunpy.run_path(${JSON.stringify(path.resolve("helpers/filesystem.py"))}, run_name='__main__')\n`);
-  const files = new SessionFilesystem(helper, { ...defaultSettings, fileTimeoutMs: 500 }); t.after(() => files.close());
+  // A busy CI runner can take a few hundred ms to import runpy + filesystem.py
+  // before the worker reaches its `time.sleep(10)`. The timeout has to be
+  // comfortably above that startup cost or the worker gets killed before it
+  // ever blocks, and the helper's reconnect replaces it instead of timing
+  // out. 2 s is well above the worst observed wall-clock on a loaded runner
+  // and still well below the sleep so the test keeps its semantics.
+  const files = new SessionFilesystem(helper, { ...defaultSettings, fileTimeoutMs: 2000 }); t.after(() => files.close());
   await assert.rejects(files.run(f.session, { action: "list", path: "" }), (error: unknown) => error instanceof AppError && error.failure.code === "TIMEOUT");
   assert.deepEqual(await files.run(f.session, { action: "list", path: "" }), []);
   const controller = new AbortController(); controller.abort();
