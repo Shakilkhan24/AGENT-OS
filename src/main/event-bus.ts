@@ -26,6 +26,7 @@ export class EventBus implements EventStream {
   private mutex = new Mutex();
   private listeners = new Set<(event: DomainEvent) => void>();
   private initialized = false;
+  private closed = false;
   private journal!: Debouncer<JournalState>;
   readonly file: string;
   constructor(
@@ -36,8 +37,8 @@ export class EventBus implements EventStream {
       throw new Error("Invalid event retention limit");
     this.file = path.join(directory, "events.json");
     this.journal = new Debouncer<JournalState>(
-      (state) => atomicJson(this.file, state, { durability: "async-strong" }),
-      25,
+      (state) => atomicJson(this.file, state),
+      0,
     );
   }
   async initialize() {
@@ -61,21 +62,11 @@ export class EventBus implements EventStream {
   publish(input: DomainEventInput): Promise<DomainEvent> {
     return this.publishMany([input]).then(events => events[0]);
   }
-  /**
-   * Enqueue `inputs` for ordered, durable delivery. Persistence coalesces:
-   * a burst of concurrent `publishMany` calls collapses into one journal
-   * write per debounce window. Subscribers always see events in sequence
-   * order as soon as they are enqueued; only the on-disk journal lags by
-   * up to one debounce window.
-   *
-   * Returns the assigned events. Resolves when the events are enqueued;
-   * the durable write completes slightly later. Use `flush()` to await
-   * durable persistence before shutdown or when the next test asserts on
-   * the journal file.
-   */
+  /** Persist the batch before publishing it. Failed writes do not advance replay. */
   publishMany(inputs: DomainEventInput[]): Promise<DomainEvent[]> {
     return this.mutex.run(async () => {
       if (!this.initialized) throw new Error("Event bus is not initialized");
+      if (this.closed) throw new Error("Event bus is closed");
       if (!inputs.length) return [];
       if (inputs.length > 5000) throw new Error("Event batch is too large");
       const batch = inputs.map((input, index) => domainEventSchema.parse({
@@ -84,8 +75,11 @@ export class EventBus implements EventStream {
         at: new Date().toISOString(),
         correlationId: input.correlationId || crypto.randomUUID(),
       }));
-      this.sequence = batch.at(-1)!.seq;
-      this.events = [...this.events, ...batch].slice(-this.limit);
+      const sequence = batch.at(-1)!.seq;
+      const events = [...this.events, ...batch].slice(-this.limit);
+      await this.journal.schedule({ version: 1, sequence, events });
+      this.sequence = sequence;
+      this.events = events;
       for (const event of batch) for (const listener of this.listeners) {
         try {
           listener(structuredClone(event));
@@ -98,11 +92,6 @@ export class EventBus implements EventStream {
           });
         }
       }
-      void this.journal.schedule({
-        version: 1,
-        sequence: this.sequence,
-        events: this.events,
-      });
       return structuredClone(batch);
     });
   }
@@ -139,7 +128,7 @@ export class EventBus implements EventStream {
    */
   async close() {
     await this.mutex.run(async () => {
-      await this.journal.flush();
+      this.closed = true;
       await this.journal.close();
     });
   }

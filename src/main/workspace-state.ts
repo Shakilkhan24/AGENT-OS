@@ -2,6 +2,7 @@ import type { SessionRecord, State, TerminalRecord } from "../shared/types";
 import { AppError } from "../shared/errors";
 import { Store } from "./store";
 import { Mutex } from "./mutex";
+import { stateSchema } from "../shared/models";
 
 /** Only JSON commits share a queue. Engine and filesystem effects run outside it. */
 export class WorkspaceState {
@@ -35,18 +36,16 @@ export class WorkspaceState {
       const next = this.read();
       const result = mutate(next);
       if (result instanceof Promise) throw new Error("State mutations must be synchronous");
-      this.value = next;
-      this.cached = freezeDeep(next);
-      await this.store.save(next);
-      return structuredClone(result);
+      const output = structuredClone(result);
+      const committed = stateSchema.parse(next);
+      await this.store.save(committed);
+      this.value = committed;
+      this.cached = freezeDeep(committed);
+      return output;
     });
   }
   /**
-   * Run a mutation, then wait for the on-disk journal to catch up. Use this
-   * when you need to observe the change from outside the process (e.g. test
-   * assertions on `state.json`, or before a restart). For in-process reads
-   * the in-memory state is already updated; you only need `flush()` when
-   * crossing the persistence boundary.
+   * Explicit durable commit alias. update() already waits for persistence.
    */
   async commit<T>(mutate: (next: State) => T): Promise<T> {
     const result = await this.update(mutate);
