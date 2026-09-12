@@ -41,7 +41,7 @@ async function fixture() {
   const cleanup = async () => {
     for (const id of (await engine.inspect()).keys()) await engine.remove(id);
     await service.close();
-    filesystem.close();
+    await filesystem.close();
     await rm(base, { recursive: true, force: true });
   };
   return { base, root, store, filesystem, engine, service, cleanup };
@@ -138,7 +138,18 @@ test("PTY attachment supports input, Unicode, resize, and leaves the process ali
   // take longer than the historical 200 ms ceiling, so we poll for the
   // prompt instead of using a fixed delay.
   for (let i = 0; i < 60 && !output.includes("$"); i++) await delay(50);
+  // Resize the PTY and *prove* the bridge applied the new size before
+  // we ask bash to report it. `attachment.resize` is fire-and-forget —
+  // the actual `ioctl(TIOCSWINSZ)` happens asynchronously inside the
+  // Python helper, so we round-trip a no-op command and only proceed once
+  // its output has been echoed back. If the bridge never resizes, the
+  // subsequent `stty size` reports the old dimensions and the assertion
+  // below never matches.
   attachment.resize(101, 31);
+  await attachment.input("printf __RESIZE_OK__\\n");
+  for (let i = 0; i < 80 && !output.includes("__RESIZE_OK__"); i++) await delay(50);
+  // Give tmux a chance to round-trip the SIGWINCH to the pane.
+  for (let i = 0; i < 40 && !output.includes("$"); i++) await delay(50);
   await attachment.input("printf 'UNICODE-λ-✓\\n'; stty size\r");
   for (let i = 0; i < 80 && !output.includes("31 101"); i++) await delay(50);
   assert.match(output, /UNICODE-λ-✓/);

@@ -47,7 +47,7 @@ test("timed out workers are replaced and cancellation never automatically retrie
   // ever blocks, and the helper's reconnect replaces it instead of timing
   // out. 2 s is well above the worst observed wall-clock on a loaded runner
   // and still well below the sleep so the test keeps its semantics.
-  const files = new SessionFilesystem(helper, { ...defaultSettings, fileTimeoutMs: 2000 }); t.after(() => files.close());
+  const files = new SessionFilesystem(helper, { ...defaultSettings, fileTimeoutMs: 2000 }); t.after(async () => { await files.close(); });
   await assert.rejects(files.run(f.session, { action: "list", path: "" }), (error: unknown) => error instanceof AppError && error.failure.code === "TIMEOUT");
   assert.deepEqual(await files.run(f.session, { action: "list", path: "" }), []);
   const controller = new AbortController(); controller.abort();
@@ -59,6 +59,6 @@ test("invalid Python result shapes fail visibly before reaching a caller", async
   const f = await serviceFixture(); t.after(f.cleanup);
   const helper = path.join(f.base, "invalid.py");
   await writeFile(helper, "import json, sys\nfor line in sys.stdin:\n r=json.loads(line)\n print(json.dumps(dict(apiVersion=2,id=r['id'],correlationId=r['correlationId'],ok=True,result={'wrong':True})),flush=True)\n");
-  const files = new SessionFilesystem(helper); t.after(() => files.close());
+  const files = new SessionFilesystem(helper); t.after(async () => { await files.close(); });
   await assert.rejects(files.register(f.session.id, f.root), /invalid payload/);
 });

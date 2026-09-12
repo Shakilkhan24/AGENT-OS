@@ -109,5 +109,27 @@ export class SessionFilesystem {
       this.registered.delete(sessionId); await this.request("unregister", { sessionId }, signal, correlationId);
     });
   }
-  close() { this.closed = true; this.reset(new AppError("CANCELLED", "The file service is closing", { outcomeUnknown: true })); }
+  async close(): Promise<void> {
+    this.closed = true;
+    // Grab a reference to the current child before `reset()` nulls it,
+    // so we can await the subprocess's exit below.
+    const child = this.child;
+    this.reset(new AppError("CANCELLED", "The file service is closing", { outcomeUnknown: true }));
+    // Wait for the helper subprocess to fully release its open file
+    // descriptors before we return. Without this, a caller that follows
+    // `close()` with `rm(workspaceDir, { recursive: true })` can race
+    // against the kernel and hit ENOTEMPTY (or, on slower runners,
+    // ENOENT on a half-removed parent in a follow-up write). SIGKILL
+    // is asynchronous: the child is dead but its fds are still held
+    // until the kernel reaps it.
+    if (child && child.exitCode === null) {
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null) { resolve(); return; }
+        child.once("exit", () => resolve());
+        // Safety net in case the child never reaches its `exit` handler
+        // for some reason (e.g. zombie that the parent never reaped).
+        setTimeout(resolve, 1000).unref();
+      });
+    }
+  }
 }

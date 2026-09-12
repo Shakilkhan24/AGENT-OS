@@ -300,8 +300,10 @@ app.on("will-quit", (event) => {
     event.preventDefault();
     shuttingDown = true;
     detach();
-    filesystem?.close();
-    const watchdog = runWithWatchdog(() => workspace!.close(), {
+    const watchdog = runWithWatchdog(async () => {
+      await filesystem?.close();
+      await workspace!.close();
+    }, {
       budgetMs: SHUTDOWN_FLUSH_BUDGET_MS,
       onTimeout: () => app.exit(1),
     });
