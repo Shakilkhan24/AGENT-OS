@@ -1,8 +1,10 @@
 # MINIMAL — Implementation Specification
 
-**Document role.** This file is the prescriptive companion to [`README.md`](README.md) (research/master plan) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (architectural contracts). Where those documents describe **intent and evidence**, this document prescribes **what to build**, **which files to change**, **which contracts to add**, and **how to test each increment**. Every feature in §5 references the existing modules it will extend so an implementing agent can begin work without first re-deriving the layout.
+> **Design reference, not the current execution checklist.** Read [IMPLEMENTATION-README.md](IMPLEMENTATION-README.md) first. Its design corrections supersede conflicting runtime, storage, lock, schema, authorization, testing and scheduling prescriptions below. File layouts, code sketches and day estimates remain proposals; check actual source and current provider documentation before using them. This specification predates the v1.2.1 baseline reconciliation.
 
-**Reading order for an implementing agent:**
+**Document role.** This file preserves detailed implementation proposals alongside [`README.md`](README.md) (product rationale) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (architectural contracts). Its module layouts, schemas and tests are design input, not mandatory code templates. The [roadmap](IMPLEMENTATION-README.md) records which proposals to retain, correct, simplify or resequence against the actual build.
+
+**Original research reading order, retained for reference after the roadmap:**
 
 1. This file (read fully)
 2. [`README.md`](README.md) §4, §5, §11, §12, §14

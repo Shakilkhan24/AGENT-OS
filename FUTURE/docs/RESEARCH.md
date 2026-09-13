@@ -1,5 +1,7 @@
 # Research record and evidence map
 
+> **Implementation entry point:** [IMPLEMENTATION-README.md](../IMPLEMENTATION-README.md) incorporates all fifteen notes and checks the proposal against the actual v1.2.1 repository. This document remains the historical research ledger; claims about missing application source refer to the original research workspace. Targeted current-source checks are recorded in the roadmap, not retroactively attributed to these investigations.
+
 Research date: 2026-09-10. This record supports the [master specification](../README.md) and [architecture contracts](ARCHITECTURE.md). It is a research/design deliverable. No competitor, cloud environment, provider account or application build was provisioned or tested.
 
 ## 1. Method and limits

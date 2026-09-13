@@ -1,5 +1,7 @@
 # MINIMAL architecture contracts
 
+> **Planning update, 2026-09-13:** [The implementation roadmap](../IMPLEMENTATION-README.md) reconciles these contracts with the actual v1.2.1 source and the specialist reviews. Follow its milestone order and corrections, including write ownership before the first managed writer. The original research context and proposed contracts below are preserved for reference.
+
 Design date: 2026-09-10. Status: proposed for review. This document specifies future behavior; it does not describe implemented features. The only supplied application evidence is [the build snapshot and request](../ins.md). File paths below are proposed boundaries, not files inspected in an application repository.
 
 The [master README](../README.md) defines product scope and phase ordering. These contracts explain the difficult parts that an implementing agent must resolve. Build only the contracts needed by the current phase.

@@ -1,5 +1,7 @@
 # MINIMAL — a durable workspace for agent-assisted work
 
+> **Implementation planning starts in [IMPLEMENTATION-README.md](IMPLEMENTATION-README.md).** It maps this vision to the inspected v1.2.1 source, resolves contradictions in the detailed specification, and provides the current milestone checklist. The research below is preserved as the 2026-09-10 product proposal; its statements about unavailable source and v1.1 gaps describe that research context. Its original sequencing is superseded by the roadmap. No future implementation is authorized merely by reading these documents.
+
 Research and design specification · 2026-09-10 · Proposed for owner review
 
 Build a workspace in which a person can give Codex or Claude Code a scoped outcome, let work continue independently of the window, understand what happened, and accept a result with evidence. MINIMAL should connect agents, terminals, project context, tools and environments around that complete workflow.
@@ -13,10 +15,10 @@ This is a specification, not an implementation report. The current workspace con
 | Reader | Start here |
 | --- | --- |
 | Product owner | [Product decision](#1-product-decision), [user workflows](#3-the-user-experience), [release plan](#12-implementation-phases), [decisions to review](#15-owner-review) |
-| Implementing agent | [Non-negotiable contracts](#4-non-negotiable-contracts), [architecture](#5-system-architecture), [phase gates](#12-implementation-phases), [implementation instructions](#14-instructions-for-the-implementing-agent) |
+| Implementing agent | [Current implementation roadmap/checklist](IMPLEMENTATION-README.md), then the relevant contracts and research below |
 | Architect/reviewer | [Decision records](#11-architectural-decisions), [detailed architecture contracts](docs/ARCHITECTURE.md), [research evidence](docs/RESEARCH.md) |
 
-The README is the master product and sequencing document. The architecture companion defines process ownership, identities, state transitions, migration, failure recovery and test targets. Research notes preserve evidence and alternatives. An accepted owner decision can supersede a proposal; record the change and its consequences instead of allowing contradictory instructions to accumulate.
+This README preserves the research-era product rationale. [IMPLEMENTATION-README.md](IMPLEMENTATION-README.md) now owns implementation sequencing and progress. The architecture companion defines process ownership, identities, state transitions, migration, failure recovery and test targets, subject to the roadmap's corrections. Research notes preserve evidence and alternatives. Record later owner decisions and their consequences instead of maintaining conflicting master plans.
 
 ## 1. Product decision
 
