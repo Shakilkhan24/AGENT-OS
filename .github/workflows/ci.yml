@@ -34,6 +34,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: List discovered backend and desktop tests
+        run: npm run test:list
+
       - name: Backend tests
         env:
           CI: "1"
