@@ -9,37 +9,26 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { fileActionSchema } from "../shared/files";
-import { Store } from "./store";
-import { TmuxEngine, type Attachment } from "./engine";
-import { SessionFilesystem } from "./filesystem";
-import { SessionService } from "./service";
 import { Logger, configureLogging, log } from "./logging";
-import { SettingsStore } from "./settings-store";
-import { DraftStore } from "./draft-store";
 import { runWithWatchdog } from "./shutdown";
 import { ProtocolDispatcher } from "./protocol-dispatcher";
-import { API_VERSION, parseSignal, type Method, type RequestArgs, type Result, type InvocationContext } from "../shared/protocol";
+import { profilePaths } from "./profile-runtime";
+import { RuntimeWorkspace } from "../runtime/workspace";
+import type { RuntimeEndpoint } from "../runtime/control-server";
+import { AppError } from "../shared/errors";
+import { API_VERSION, methods, parseSignal, parseResult, type Method, type RequestArgs, type Result, type InvocationContext } from "../shared/protocol";
 
 if (process.env.MINIMAL_DATA_DIR)
   app.setPath("userData", path.resolve(process.env.MINIMAL_DATA_DIR));
 app.setName("MINIMAL");
 const locked = app.requestSingleInstanceLock();
 let window: BrowserWindow | undefined;
-let filesystem: SessionFilesystem | undefined;
-let workspace: SessionService | undefined;
-let attachment: Attachment | undefined;
-let attachmentGeneration = 0;
+let workspace: RuntimeWorkspace | undefined;
+let endpoint: RuntimeEndpoint | undefined;
 let quitRequested = false;
 const pendingRequests = new Set<Promise<unknown>>();
 const protocol = new ProtocolDispatcher();
-const incarnation = crypto.randomUUID();
-let unsubscribeWorkspace: (() => void) | undefined;
-let workspaceChangeTimer: ReturnType<typeof setTimeout> | undefined;
-const detach = () => {
-  attachment?.close();
-  attachment = undefined;
-};
+const detach = () => endpoint?.detachView();
 if (!locked) app.quit();
 else {
   app.on("second-instance", () => {
@@ -53,43 +42,12 @@ else {
       const rendererUrl = pathToFileURL(location).href;
       const directory = app.getPath("userData");
       configureLogging(new Logger(path.join(directory, "logs")));
-      const settings = await new SettingsStore(directory).load();
-      const drafts = new DraftStore(directory, settings.draftLimit);
-      configureLogging(
-        new Logger(path.join(directory, "logs"), settings.logRetentionDays),
-      );
-      log({
-        level: "info",
-        source: "application",
-        event: "started",
-        fields: { version: app.getVersion() },
+      workspace = await RuntimeWorkspace.open(directory, path.join(__dirname, "../helpers"), app.getVersion());
+      configureLogging(new Logger(path.join(directory, "logs"), workspace.settings.logRetentionDays));
+      log({ level: "info", source: "application", event: "started", fields: { version: app.getVersion() } });
+      endpoint = workspace.connect({ connectionId: crypto.randomUUID(), profileKey: profilePaths(directory).key, principal: "desktop" }, message => {
+        if (window && !window.isDestroyed()) window.webContents.send(message.name, message.envelope);
       });
-      filesystem = new SessionFilesystem(
-        path.join(__dirname, "../helpers/filesystem.py"),
-        settings,
-      );
-      const engine = new TmuxEngine(
-        directory,
-        path.join(__dirname, "../helpers/pty_bridge.py"),
-        settings,
-      );
-      const store = new Store(directory);
-      const service = new SessionService(
-        store,
-        engine,
-        filesystem,
-        settings,
-      );
-      await service.initialize();
-      workspace = service;
-      unsubscribeWorkspace = service.events.subscribe(() => {
-        if (workspaceChangeTimer || !window || window.isDestroyed()) return;
-        workspaceChangeTimer = setTimeout(() => {
-          workspaceChangeTimer = undefined;
-          if (window && !window.isDestroyed()) window.webContents.send("workspace-changed", { apiVersion: API_VERSION, args: [] });
-        }, 25);
-      });
-      service.start();
       electronSession.defaultSession.setPermissionRequestHandler(
         (_contents, _permission, callback) => callback(false),
       );
@@ -106,10 +64,6 @@ else {
           throw new Error("Untrusted IPC sender");
       };
       const id = z.string().uuid();
-      const dimensions = (cols: unknown, rows: unknown) => [
-        z.number().int().min(2).max(500).parse(cols),
-        z.number().int().min(2).max(250).parse(rows),
-      ];
       const wire = <M extends Method>(channel: M, callback: (args: RequestArgs<M>, context: InvocationContext) => Result<M> | Promise<Result<M>>) => {
         protocol.register(channel, callback);
         ipcMain.handle(channel, (event, request: unknown) => {
@@ -120,7 +74,6 @@ else {
         });
       };
       const handle = <M extends Method>(channel: M, callback: (...args: RequestArgs<M>) => Result<M> | Promise<Result<M>>) => wire(channel, args => callback(...args));
-      handle("hello", () => ({ apiVersion: API_VERSION, appVersion: app.getVersion(), incarnation }));
       ipcMain.on("cancel-request", (event, value: unknown) => {
         try {
           trusted(event);
@@ -130,15 +83,6 @@ else {
           log({ level: "warning", source: "protocol", event: "cancellation-rejected" });
         }
       });
-      handle("snapshot", () => service.snapshot());
-      handle("get-settings", () => settings);
-      handle("list-drafts", () => drafts.list());
-      handle("read-draft", draftId => drafts.read(draftId));
-      handle("save-draft", input => {
-        service.state.session(input.sessionId);
-        return drafts.save(input);
-      });
-      handle("remove-draft", draftId => drafts.remove(draftId));
       handle("read-clipboard", () => clipboard.readText());
       handle("write-clipboard", (text) =>
         clipboard.writeText(
@@ -155,92 +99,29 @@ else {
         });
         return result.canceled ? null : result.filePaths[0];
       });
-      handle("create-session", (name, directory) =>
-        service.createSession(name, directory),
-      );
-      handle("rename-session", (sessionId, name) =>
-        service.renameSession(id.parse(sessionId), name),
-      );
-      handle("delete-session", (sessionId) =>
-        service.deleteSession(id.parse(sessionId)),
-      );
-      wire("create-terminals", ([sessionId, presetId, count, cwd], context) =>
-        service.launchTerminals(sessionId, { presetId, count, cwd }, context.signal));
-      wire("launch-terminals", ([sessionId, request], context) =>
-        service.launchTerminals(sessionId, request, context.signal));
-      handle("rename-terminal", (sessionId, terminalId, label) =>
-        service.renameTerminal(
-          id.parse(sessionId),
-          id.parse(terminalId),
-          label,
-        ),
-      );
-      handle("delete-terminal", (sessionId, terminalId) =>
-        service.deleteTerminal(id.parse(sessionId), id.parse(terminalId)),
-      );
-      handle("save-presets", (presets) => service.savePresets(presets));
-      wire("files", ([sessionId, request], context) =>
-        service.files(sessionId, fileActionSchema.parse(request), context),
-      );
-      handle("attach", async (terminalId, cols, rows) => {
-        const generation = ++attachmentGeneration;
-        terminalId = id.parse(terminalId);
-        const [c, r] = dimensions(cols, rows);
-        await service.requireTerminal(terminalId);
-        if (generation !== attachmentGeneration)
-          throw new Error("Terminal selection changed");
-        detach();
-        attachment = engine.attach(
-          terminalId,
-          c,
-          r,
-          (token, data) => {
-            if (!window?.isDestroyed())
-              window?.webContents.send("terminal-output", { apiVersion: API_VERSION, args: [token, data] });
-          },
-          (token) => {
-            if (!window?.isDestroyed())
-              window?.webContents.send("terminal-exit", { apiVersion: API_VERSION, args: [token] });
-          },
-        );
-        return attachment.token;
-      });
-      handle("detach", (token) => {
-        if (attachment?.token === id.parse(token)) detach();
-      });
-      handle("startup-recovery", () => store.recoveredFromInvalid ?? null);
-      handle("input", (token, data) => {
-        if (attachment?.token !== id.parse(token)) throw new Error("Terminal selection changed; input was cancelled");
-        return attachment.input(z.string().max(65536).parse(data));
-      });
+      for (const channel of Object.keys(methods) as Method[]) {
+        if (channel === "read-clipboard" || channel === "write-clipboard" || channel === "choose-directory") continue;
+        wire(channel, async (args, context) => {
+          const cancel = () => endpoint!.cancel(context.requestId);
+          context.signal.addEventListener("abort", cancel, { once: true });
+          try {
+            context.signal.throwIfAborted();
+            const response = await endpoint!.dispatch({ apiVersion: API_VERSION, id: context.requestId,
+              correlationId: context.correlationId, deadlineAt: context.deadlineAt, method: channel, args });
+            if (!response.ok) throw new AppError(response.error.code, response.error.message, response.error);
+            return parseResult(channel, args, response.result);
+          } finally { context.signal.removeEventListener("abort", cancel); }
+        });
+      }
       for (const channel of ["resize", "acknowledge"] as const)
         ipcMain.on(channel, (event, value: unknown) => {
           try {
             trusted(event);
-            const [token, first, second] = parseSignal(channel, value);
-            if (attachment?.token !== token) return;
-            if (channel === "resize") {
-              const [c, r] = dimensions(first, second);
-              attachment.resize(c, r);
-            } else
-              attachment.acknowledge(
-                z
-                  .number()
-                  .int()
-                  .min(0)
-                  .max(1024 * 1024)
-                  .parse(first),
-              );
+            const args = parseSignal(channel, value);
+            endpoint!.signal({ type: "signal", name: channel, envelope: { apiVersion: API_VERSION, args } });
           } catch (error) {
-            log({
-              level: "warning",
-              source: "ipc",
-              event: "message-rejected",
-              fields: {
-                channel,
-                kind: error instanceof Error ? error.name : "unknown",
-              },
-            });
+            log({ level: "warning", source: "ipc", event: "message-rejected",
+              fields: { channel, kind: error instanceof Error ? error.name : "unknown" } });
           }
         });
       window = new BrowserWindow({
@@ -273,14 +154,6 @@ else {
       // If `Store.load()` couldn't parse the existing state.json, it
       // backs up the file and falls back to the empty default. The preload
       // queries the recovery notice after subscribing, avoiding a load race.
-      if (store.recoveredFromInvalid) {
-        log({
-          level: "warning",
-          source: "application",
-          event: "state-recovered",
-          fields: { message: store.recoveredFromInvalid },
-        });
-      }
       await window.loadFile(location);
     })
     .catch((error) => {
@@ -312,13 +185,11 @@ function flushBeforeQuit(event: Electron.Event) {
     event.preventDefault();
     if (shuttingDown) return;
     shuttingDown = true;
-    unsubscribeWorkspace?.(); clearTimeout(workspaceChangeTimer);
     detach();
     const watchdog = runWithWatchdog(async () => {
-      const launches = workspace!.launches.close();
+      const launches = workspace!.service.launches.close();
       const pending = await Promise.allSettled([launches, protocol.close(), ...pendingRequests]);
       const services = await Promise.allSettled([workspace!.close()]);
-      await filesystem?.close();
       const failure = [...pending, ...services].find(result => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
     }, {

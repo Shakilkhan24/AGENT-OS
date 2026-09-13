@@ -12,7 +12,7 @@ Concurrent duplicate request IDs are refused. This is not durable exactly-once e
 
 Committed domain events coalesce into a workspace refresh hint. The renderer refreshes after the hint, shares overlapping refreshes and rejects old snapshot sequences. Four-second polling remains a fallback. This fixes compounded backend/renderer polling delays in displaying terminal exits. The hint is not a durable cursor subscription; snapshot/replay synchronization belongs to M2.
 
-The desktop still owns the services at this increment. Independent runtime ownership, authenticated transport integration and terminal-owned accepted-paste queues are the remaining M1 work. No state migration or active-profile conversion occurs here.
+`RuntimeWorkspace` owns the common session, terminal, file, draft, event and attachment handlers without importing Electron. Electron main keeps sender validation, the compatibility facade, windows, dialogs and clipboard. It currently hosts that workspace in-process; tests also exercise the same handlers through the authenticated socket. Independent process ownership, desktop socket integration and terminal-owned accepted-paste queues are the remaining M1 work. No state migration or active-profile conversion occurs here.
 
 ## Local runtime transport
 
@@ -23,3 +23,5 @@ Authentication has a three-second deadline and a 64 KiB frame limit. A private p
 Successful authentication reports runtime incarnation and application version. Replies/signals are validated by the client before delivery. The client never reconnects and resends a request automatically: a missing reply may mean the mutation already happened. Closing the server stops admission and drains accepted operations; drain failures remain visible.
 
 This is a local same-user transport, not a sandbox or remote/multi-user authentication service. It does not claim OS peer-credential inspection. Production integration still needs the verified profile-lock launcher, validation of all parent paths, protected token publication and upgrade fencing. The module's caller must own that lock before exposing a real profile. Tests use disposable profiles; no production socket or daemon is enabled by this increment.
+
+The shared workspace permits one active terminal view until M5. An attachment token is additionally bound to its connection: another observer cannot use it for input, resize or detachment. Replacement invalidates the previous selection. Disconnecting a client detaches its view and drains accepted operations without cancelling later members of an accepted launch batch. Explicit workspace shutdown cancels between batch members and drains storage/helpers. The desktop host retains its prior close policy until the independent runtime is deployed.

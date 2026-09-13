@@ -10,6 +10,7 @@ M1 runtime foundation, in progress.
 - Bound pending requests by count and UTF-8 bytes; carry deadlines/cancellation into file operations and launch batches without undoing started terminals or replaying uncertain mutations.
 - Refresh workspace state from committed event hints so terminal exit status appears promptly, retaining polling as a fallback.
 - Add an authenticated local socket transport with bounded framing, per-connection cancellation, slow-peer protection and explicit disconnect uncertainty; runtime deployment remains pending.
+- Consolidate domain operations in an Electron-independent workspace used by the desktop facade and headless socket tests. Bind attachment control to its connection and preserve accepted batches across observer disconnects.
 
 ## [1.2.2] - 2026-09-13
 
