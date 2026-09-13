@@ -32,7 +32,7 @@ On WSL's Windows filesystem, `RENAME_NOREPLACE` is unavailable. The provider exc
 
 Before spawning tmux or a terminal client, Python closes inherited nonstandard descriptors. Electron can otherwise leak private sockets into a detached tmux server, preventing an automation or parent process from observing the GUI's complete shutdown. The desktop close/reopen test exercises this boundary.
 
-The renderer separates command entry (`LaunchDialog`), scrollable tabs and fixed add control (`TerminalTabs`), snapshot sequencing (`useWorkspace`), and the attached terminal (`Terminal`). Selected tabs and explorer visibility live in local presentation storage. The existing preset-based launch API delegates to the unified launch operation. Version-1 state migrates to version 2 with a preserved backup. Settings, drafts, environment profiles and event records are validated; full versioned Electron IPC remains planned.
+The renderer separates command entry (`LaunchDialog`), scrollable tabs and fixed add control (`TerminalTabs`), snapshot sequencing (`useWorkspace`), and the attached terminal (`Terminal`). Selected tabs and explorer visibility live in local presentation storage. The existing preset-based launch API delegates to the unified launch operation. Version-1 state migrates to version 2 with a preserved backup. The [versioned control protocol](control-protocol.md) validates the preload handshake, named operations, replies and terminal signals. Committed event hints trigger coalesced snapshot refreshes; polling remains a fallback.
 
 ## Future changes
 

@@ -18,6 +18,8 @@ import { Logger, configureLogging, log } from "./logging";
 import { SettingsStore } from "./settings-store";
 import { DraftStore } from "./draft-store";
 import { runWithWatchdog } from "./shutdown";
+import { ProtocolDispatcher } from "./protocol-dispatcher";
+import { API_VERSION, parseSignal, type Method, type RequestArgs, type Result, type InvocationContext } from "../shared/protocol";
 
 if (process.env.MINIMAL_DATA_DIR)
   app.setPath("userData", path.resolve(process.env.MINIMAL_DATA_DIR));
@@ -30,6 +32,10 @@ let attachment: Attachment | undefined;
 let attachmentGeneration = 0;
 let quitRequested = false;
 const pendingRequests = new Set<Promise<unknown>>();
+const protocol = new ProtocolDispatcher();
+const incarnation = crypto.randomUUID();
+let unsubscribeWorkspace: (() => void) | undefined;
+let workspaceChangeTimer: ReturnType<typeof setTimeout> | undefined;
 const detach = () => {
   attachment?.close();
   attachment = undefined;
@@ -76,6 +82,13 @@ else {
       );
       await service.initialize();
       workspace = service;
+      unsubscribeWorkspace = service.events.subscribe(() => {
+        if (workspaceChangeTimer || !window || window.isDestroyed()) return;
+        workspaceChangeTimer = setTimeout(() => {
+          workspaceChangeTimer = undefined;
+          if (window && !window.isDestroyed()) window.webContents.send("workspace-changed", { apiVersion: API_VERSION, args: [] });
+        }, 25);
+      });
       service.start();
       electronSession.defaultSession.setPermissionRequestHandler(
         (_contents, _permission, callback) => callback(false),
@@ -97,14 +110,26 @@ else {
         z.number().int().min(2).max(500).parse(cols),
         z.number().int().min(2).max(250).parse(rows),
       ];
-      const handle = (channel: string, callback: (...args: any[]) => any) =>
-        ipcMain.handle(channel, (event, ...args) => {
+      const wire = <M extends Method>(channel: M, callback: (args: RequestArgs<M>, context: InvocationContext) => Result<M> | Promise<Result<M>>) => {
+        protocol.register(channel, callback);
+        ipcMain.handle(channel, (event, request: unknown) => {
           trusted(event);
-          if (shuttingDown) throw new Error("The workspace is closing");
-          const pending = Promise.resolve().then(() => callback(...args));
+          const pending = protocol.dispatch(channel, request);
           pendingRequests.add(pending);
           return pending.finally(() => pendingRequests.delete(pending));
         });
+      };
+      const handle = <M extends Method>(channel: M, callback: (...args: RequestArgs<M>) => Result<M> | Promise<Result<M>>) => wire(channel, args => callback(...args));
+      handle("hello", () => ({ apiVersion: API_VERSION, appVersion: app.getVersion(), incarnation }));
+      ipcMain.on("cancel-request", (event, value: unknown) => {
+        try {
+          trusted(event);
+          const cancellation = z.object({ apiVersion: z.literal(API_VERSION), id }).strict().parse(value);
+          protocol.cancel(cancellation.id);
+        } catch {
+          log({ level: "warning", source: "protocol", event: "cancellation-rejected" });
+        }
+      });
       handle("snapshot", () => service.snapshot());
       handle("get-settings", () => settings);
       handle("list-drafts", () => drafts.list());
@@ -139,17 +164,10 @@ else {
       handle("delete-session", (sessionId) =>
         service.deleteSession(id.parse(sessionId)),
       );
-      handle("create-terminals", (sessionId, presetId, count, cwd) =>
-        service.createTerminals(
-          id.parse(sessionId),
-          id.parse(presetId),
-          count,
-          cwd,
-        ),
-      );
-      handle("launch-terminals", (sessionId, request) =>
-        service.launchTerminals(id.parse(sessionId), request),
-      );
+      wire("create-terminals", ([sessionId, presetId, count, cwd], context) =>
+        service.launchTerminals(sessionId, { presetId, count, cwd }, context.signal));
+      wire("launch-terminals", ([sessionId, request], context) =>
+        service.launchTerminals(sessionId, request, context.signal));
       handle("rename-terminal", (sessionId, terminalId, label) =>
         service.renameTerminal(
           id.parse(sessionId),
@@ -161,8 +179,8 @@ else {
         service.deleteTerminal(id.parse(sessionId), id.parse(terminalId)),
       );
       handle("save-presets", (presets) => service.savePresets(presets));
-      handle("files", (sessionId, request) =>
-        service.files(id.parse(sessionId), fileActionSchema.parse(request)),
+      wire("files", ([sessionId, request], context) =>
+        service.files(sessionId, fileActionSchema.parse(request), context),
       );
       handle("attach", async (terminalId, cols, rows) => {
         const generation = ++attachmentGeneration;
@@ -178,11 +196,11 @@ else {
           r,
           (token, data) => {
             if (!window?.isDestroyed())
-              window?.webContents.send("terminal-output", token, data);
+              window?.webContents.send("terminal-output", { apiVersion: API_VERSION, args: [token, data] });
           },
           (token) => {
             if (!window?.isDestroyed())
-              window?.webContents.send("terminal-exit", token);
+              window?.webContents.send("terminal-exit", { apiVersion: API_VERSION, args: [token] });
           },
         );
         return attachment.token;
@@ -195,11 +213,12 @@ else {
         if (attachment?.token !== id.parse(token)) throw new Error("Terminal selection changed; input was cancelled");
         return attachment.input(z.string().max(65536).parse(data));
       });
-      for (const channel of ["resize", "acknowledge"])
-        ipcMain.on(channel, (event, token, first, second) => {
+      for (const channel of ["resize", "acknowledge"] as const)
+        ipcMain.on(channel, (event, value: unknown) => {
           try {
             trusted(event);
-            if (attachment?.token !== id.parse(token)) return;
+            const [token, first, second] = parseSignal(channel, value);
+            if (attachment?.token !== token) return;
             if (channel === "resize") {
               const [c, r] = dimensions(first, second);
               attachment.resize(c, r);
@@ -293,10 +312,11 @@ function flushBeforeQuit(event: Electron.Event) {
     event.preventDefault();
     if (shuttingDown) return;
     shuttingDown = true;
+    unsubscribeWorkspace?.(); clearTimeout(workspaceChangeTimer);
     detach();
     const watchdog = runWithWatchdog(async () => {
       const launches = workspace!.launches.close();
-      const pending = await Promise.allSettled([launches, ...pendingRequests]);
+      const pending = await Promise.allSettled([launches, protocol.close(), ...pendingRequests]);
       const services = await Promise.allSettled([workspace!.close()]);
       await filesystem?.close();
       const failure = [...pending, ...services].find(result => result.status === "rejected");

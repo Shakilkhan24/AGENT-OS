@@ -10,7 +10,7 @@ export class Reconciler {
   private generation = 0;
   private pending?: { generation: number; promise: Promise<void> };
   private processes = new Map<string, ProcessInfo>();
-  private inspectInflight?: Promise<Map<string, ProcessInfo>>;
+  private inspectInflight?: { generation: number; promise: Promise<Map<string, ProcessInfo>> };
   private signatures = new Map<string, string>();
   private failure?: Failure;
   private prompts = new Set<string>();
@@ -29,9 +29,11 @@ export class Reconciler {
    * on the very next snapshot.
    */
   private inspectCoalesced(): Promise<Map<string, ProcessInfo>> {
-    if (this.inspectInflight) return this.inspectInflight;
-    const promise = this.engine.inspect().finally(() => { this.inspectInflight = undefined; });
-    this.inspectInflight = promise;
+    if (this.inspectInflight?.generation === this.generation) return this.inspectInflight.promise;
+    const promise = this.engine.inspect().finally(() => {
+      if (this.inspectInflight?.promise === promise) this.inspectInflight = undefined;
+    });
+    this.inspectInflight = { generation: this.generation, promise };
     return promise;
   }
   private status(terminal: { id: string; deleting?: boolean; launchState?: string }): TerminalView["status"] {

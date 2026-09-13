@@ -6,6 +6,22 @@ import { setImmediate } from "node:timers/promises";
 import { Store } from "../src/main/store";
 import { EventBus } from "../src/main/event-bus";
 
+test("request cancellation preserves the current launch item and cancels later items", async t => {
+  const f = await serviceFixture();
+  const entered = deferred(), release = deferred();
+  t.after(async () => { release.resolve(); await f.cleanup(); });
+  f.engine.beforeCreate = async () => { entered.resolve(); await release.promise; };
+  const controller = new AbortController();
+  const pending = f.service.launchTerminals(f.session.id, { command: "worker", count: 3 }, controller.signal);
+  await entered.promise; controller.abort(); release.resolve();
+  const result = await pending;
+  assert.equal(result.launches![0].state, "cancelled");
+  assert.equal(f.engine.created.length, 1);
+  assert.equal(f.engine.removed.length, 0);
+  await assert.rejects(f.service.launchTerminals(f.session.id, { command: "must not start" }, controller.signal));
+  assert.equal(f.engine.created.length, 1);
+});
+
 test("a blocked batch streams intent, deduplicates and cancels between items without blocking metadata", { timeout: 10000 }, async (t) => {
   const f = await serviceFixture(); t.after(f.cleanup);
   const entered = deferred(), release = deferred();

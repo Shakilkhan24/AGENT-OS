@@ -130,6 +130,8 @@ export interface API {
   onOutput(listener: (token: string, data: string) => void): () => void;
   onExit(listener: (token: string) => void): () => void;
   onStartupRecovered(listener: (message: string) => void): () => void;
+  onProtocolFailure(listener: (failure: Failure) => void): () => void;
+  onWorkspaceChanged(listener: () => void): () => void;
 }
 declare global {
   interface Window {

@@ -72,4 +72,4 @@ Tests use temporary profiles, directories, and private tmux sockets. They do not
 
 Follow the [implementation checklist](FUTURE/IMPLEMENTATION-README.md) for current progress. M0 adds release/upgrade safety and tested runtime experiments; domain operations still run in Electron until M1.
 
-See the [1.2.1 baseline](docs/build-snapshot-v1.2.1.md), [recovery guide](docs/recovery.md), and [architecture](docs/architecture.md) for extension points and failure behavior, and [verification](docs/verification.md) for requirement coverage.
+See the [1.2.1 baseline](docs/build-snapshot-v1.2.1.md), [recovery guide](docs/recovery.md), [architecture](docs/architecture.md) and [control protocol](docs/control-protocol.md) for extension points and failure behavior, and [verification](docs/verification.md) for requirement coverage.

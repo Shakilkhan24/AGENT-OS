@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { serviceFixture } from "./support";
+import { deferred, serviceFixture } from "./support";
 
 test("engine failures are visible once and recovery persists exit details without relaunching", async (t) => {
   const f = await serviceFixture(); t.after(f.cleanup);
@@ -18,4 +18,28 @@ test("engine failures are visible once and recovery persists exit details withou
   await f.service.state.store.flush();
   assert.equal((await f.store.load()).sessions[0].terminals[0].endedAt, pane.endedAt);
   assert.equal(f.service.events.replay(0).events.filter(e => e.type === "engine-restored").length, 1);
+});
+
+test("a launch invalidation cannot reuse or clear an older in-flight engine inspection", async t => {
+  const f = await serviceFixture();
+  const firstGate = deferred(), secondGate = deferred();
+  t.after(async () => { firstGate.resolve(); secondGate.resolve(); await f.cleanup(); });
+  const launched = await f.service.launchTerminals(f.session.id, { command: "worker" });
+  let calls = 0;
+  f.engine.inspect = async () => {
+    calls++;
+    const before = structuredClone(f.engine.processes);
+    await (calls === 1 ? firstGate : secondGate).promise;
+    return before;
+  };
+  const old = f.service.reconciliation.cachedInspect();
+  f.engine.processes.get(launched.terminalIds[0])!.dead = true;
+  f.service.reconciliation.invalidate();
+  const current = f.service.reconciliation.cachedInspect();
+  assert.equal(calls, 2);
+  firstGate.resolve(); await old;
+  const coalesced = f.service.reconciliation.cachedInspect();
+  assert.equal(current, coalesced); assert.equal(calls, 2);
+  secondGate.resolve();
+  assert.equal((await current).get(launched.terminalIds[0])!.dead, true);
 });

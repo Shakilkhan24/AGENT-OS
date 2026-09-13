@@ -1,6 +1,6 @@
 # MINIMAL — implementation roadmap from v1.2.1 to the FUTURE system
 
-Execution revision 2 · 2026-09-13 · Baseline commit `3d96f78` · **M0 complete as v1.2.2 on `feat/m0-foundation`; M1 is next.**
+Execution revision 3 · 2026-09-13 · Baseline commit `3d96f78` · **M0 complete as v1.2.2; M1 in progress on `feat/m1-runtime`.**
 
 Start with the existing terminal application. Establish independent runtime ownership and transactional state, then complete one managed repair with trustworthy review evidence. Extend that same execution path into reusable capabilities, coordinated work, workflows, schedules and owned remote hosts. Keep ordinary terminals available throughout.
 
@@ -148,6 +148,8 @@ M9 is a recurring release gate. Each milestone below is divided into small, inte
 ### M1 — move ownership behind an independent runtime
 
 **Entry:** M0 package/ownership choices. **Group together:** control protocol, process ownership and existing-service integration. Keep JSON temporarily so runtime extraction and storage migration are independently diagnosable.
+
+Progress: the shared versioned manifest and typed Electron facade are implemented, including validated replies/signals, byte/count limits, deadlines, correlation IDs and cancellation reaching file/batch operations. Committed event hints now refresh terminal status promptly. See [control protocol](../docs/control-protocol.md). M1.1 remains open until the actual runtime boundary uses the same contract; production services still belong to Electron.
 
 - [ ] M1.1 Define one shared versioned method manifest, typed success/failure envelopes, request/correlation IDs, frame limits, deadlines and cancellation. Validate requests and responses at preload, runtime and helper boundaries. Reject incompatible versions before mutation; preserve the named `window.minimal` API as a compatibility facade.
 - [ ] M1.2 Extract session/terminal/file operations into the runtime. Electron main keeps windows, dialogs, clipboard and the authenticated client connection. Split `App.tsx` into shell, session actions, dialogs and feature views as these boundaries change; keep each new owner focused and generally below 500 lines.

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Snapshot, TerminalView } from "../shared/types";
 
-/** Polls cannot overwrite a newer mutation response when IPC resolves out of order. */
+/** Push hints trigger coalesced refreshes; fallback polls cannot overwrite a newer response. */
 export function useWorkspace(report: (error: unknown) => void) {
   const [snapshot, setSnapshot] = useState<Snapshot>({
     sequence: 0,
@@ -18,20 +18,33 @@ export function useWorkspace(report: (error: unknown) => void) {
   }, []);
   useEffect(() => {
     let stopped = false;
+    let polling = false, invalidated = false;
     let timer: ReturnType<typeof setTimeout>;
+    const unsubscribe = window.minimal.onProtocolFailure(failure => report(new Error(failure.message)));
     const poll = async () => {
+      if (stopped) return;
+      if (polling) { invalidated = true; return; }
+      clearTimeout(timer); polling = true;
       try {
         const next = await window.minimal.snapshot();
         if (!stopped) accept(next);
       } catch (error) {
         if (!stopped) report(error);
       }
-      if (!stopped) timer = setTimeout(poll, 4000);
+      polling = false;
+      if (!stopped) timer = setTimeout(poll, invalidated ? 25 : 4000);
+      invalidated = false;
     };
+    const unsubscribeChanges = window.minimal.onWorkspaceChanged(() => {
+      if (polling) { invalidated = true; return; }
+      clearTimeout(timer); timer = setTimeout(poll, 25);
+    });
     void poll();
     return () => {
       stopped = true;
       clearTimeout(timer);
+      unsubscribe();
+      unsubscribeChanges();
     };
   }, [accept, report]);
   return { snapshot, ready, accept };

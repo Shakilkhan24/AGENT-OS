@@ -9,7 +9,7 @@ import { stopPolicySchema, type StopPolicy } from "../shared/events";
 import type { EngineAdapter } from "../shared/engine";
 import type { FileAction, Preset, LaunchRequest, LaunchResult, SessionMetadata, EnvProfile, Hook } from "../shared/types";
 import { Store } from "./store";
-import { SessionFilesystem } from "./filesystem";
+import { SessionFilesystem, type FileOperationOptions } from "./filesystem";
 import { WorkspaceState, findSession, findTerminal } from "./workspace-state";
 import { EventBus } from "./event-bus";
 import { Reconciler } from "./reconciler";
@@ -97,10 +97,16 @@ export class SessionService {
   }
   beginLaunch(sessionId: string, request: LaunchRequest) { return this.launches.begin(sessionId, request); }
   cancelLaunch(id: string) { return this.launches.cancel(id); }
-  async launchTerminals(sessionId: string, request: LaunchRequest): Promise<LaunchResult> {
+  async launchTerminals(sessionId: string, request: LaunchRequest, signal?: AbortSignal): Promise<LaunchResult> {
+    signal?.throwIfAborted();
     const initial = await this.beginLaunch(sessionId, request);
-    const record = await this.launches.wait(initial.id);
-    return { ...(await this.snapshot()), launchId: record.id, terminalIds: record.terminalIds, launchErrors: record.errors };
+    const cancel = () => { this.cancelLaunch(initial.id); };
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    try {
+      const record = await this.launches.wait(initial.id);
+      return { ...(await this.snapshot()), launchId: record.id, terminalIds: record.terminalIds, launchErrors: record.errors };
+    } finally { signal?.removeEventListener("abort", cancel); }
   }
   async renameTerminal(sessionId: string, terminalId: string, label: string) {
     label = nameSchema.parse(label);
@@ -129,7 +135,7 @@ export class SessionService {
   private unique(items: { id: string }[]) {
     if (new Set(items.map(item => item.id)).size !== items.length) throw new AppError("INVALID_REQUEST", "Record IDs must be unique");
   }
-  files<A extends FileAction>(sessionId: string, request: A) { return this.filesystem.run(this.state.session(sessionId), request); }
+  files<A extends FileAction>(sessionId: string, request: A, options: FileOperationOptions = {}) { return this.filesystem.run(this.state.session(sessionId), request, options); }
   async requireTerminal(id: string) {
     const terminal = this.state.read().sessions.filter(s => !s.deleting).flatMap(s => s.terminals).find(t => t.id === id && !t.deleting);
     if (!terminal) throw new AppError("NOT_FOUND", "Terminal no longer exists");

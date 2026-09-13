@@ -2,6 +2,14 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+M1 runtime foundation, in progress.
+
+- Introduce the shared versioned control manifest, preload handshake, typed replies, validated terminal signals and visible protocol failures.
+- Bound pending requests by count and UTF-8 bytes; carry deadlines/cancellation into file operations and launch batches without undoing started terminals or replaying uncertain mutations.
+- Refresh workspace state from committed event hints so terminal exit status appears promptly, retaining polling as a fallback.
+
 ## [1.2.2] - 2026-09-13
 
 M0 compatibility and packaging prerequisites for the FUTURE roadmap.
