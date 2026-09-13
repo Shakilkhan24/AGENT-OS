@@ -9,6 +9,7 @@ M1 runtime foundation, in progress.
 - Introduce the shared versioned control manifest, preload handshake, typed replies, validated terminal signals and visible protocol failures.
 - Bound pending requests by count and UTF-8 bytes; carry deadlines/cancellation into file operations and launch batches without undoing started terminals or replaying uncertain mutations.
 - Refresh workspace state from committed event hints so terminal exit status appears promptly, retaining polling as a fallback.
+- Add an authenticated local socket transport with bounded framing, per-connection cancellation, slow-peer protection and explicit disconnect uncertainty; runtime deployment remains pending.
 
 ## [1.2.2] - 2026-09-13
 
