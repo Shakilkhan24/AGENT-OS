@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import type { TerminalView } from "../shared/types";
 
@@ -18,6 +18,8 @@ function TerminalTabsImpl({
   add(): void;
 }) {
   const strip = useRef<HTMLDivElement>(null);
+  const [focused, setFocused] = useState(selected);
+  const tabStop = terminals.some(item => item.id === focused) ? focused : selected ?? terminals[0]?.id;
   useEffect(() => {
     const element = strip.current;
     if (!element) return;
@@ -48,10 +50,23 @@ function TerminalTabsImpl({
           >
             <button
               role="tab"
+              tabIndex={tabStop === item.id ? 0 : -1}
               aria-selected={selected === item.id}
               className="terminal-tab"
               title={`${item.label} · ${item.status}\n${item.command || "Interactive shell"}`}
               onClick={() => select(item.id)}
+              onFocus={() => setFocused(item.id)}
+              onKeyDown={event => {
+                const buttons = Array.from(strip.current!.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+                const index = buttons.indexOf(event.currentTarget);
+                const next = event.key === "ArrowRight" ? (index + 1) % buttons.length
+                  : event.key === "ArrowLeft" ? (index + buttons.length - 1) % buttons.length
+                  : event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : undefined;
+                if (next === undefined) return;
+                event.preventDefault();
+                buttons[next].focus();
+                buttons[next].scrollIntoView({ block: "nearest", inline: "nearest" });
+              }}
             >
               <span
                 className={`dot ${item.status === "running" ? "live" : item.status === "exited" ? "exited" : ""}`}
@@ -60,6 +75,7 @@ function TerminalTabsImpl({
             </button>
             <button
               className="tab-close"
+              tabIndex={tabStop === item.id ? 0 : -1}
               aria-label={`Close ${item.label}`}
               title={`Stop and close ${item.label}`}
               disabled={closing.has(item.id) || item.deleting}
