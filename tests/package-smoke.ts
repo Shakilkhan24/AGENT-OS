@@ -1,6 +1,6 @@
 import { chromium } from "@playwright/test";
-import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { spawn, execFileSync } from "node:child_process";
+import { mkdtemp, mkdir, rm, symlink, writeFile, readFile } from "node:fs/promises";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,13 +11,22 @@ const base = await mkdtemp(path.join(tmpdir(), "minimal-package-"));
 const root = path.join(base, "project");
 await mkdir(root);
 const data = path.join(base, "data");
-const executable = path.resolve(
-  `release/minimal-linux-${process.arch}/minimal`,
-);
+const args = process.argv.slice(2);
+if (args.length && (args.length !== 2 || args[0] !== "--executable")) throw new Error("Usage: package-smoke.ts [--executable PATH]");
+const executable = path.resolve(args[1] ?? `release/current-linux-${process.arch}/minimal`);
+// Exercise the package with only its documented external programs on PATH.
+// The test harness uses Node; the actual application cannot resolve global Node/npm.
+const bin = path.join(base, "bin");
+await mkdir(bin); await mkdir(data);
+for (const name of ["python3", "tmux", "bash", "sleep"]) {
+  const resolved = execFileSync("/bin/sh", ["-c", 'command -v "$1"', "resolve", name], { encoding: "utf8" }).trim();
+  await symlink(resolved, path.join(bin, name));
+}
+await writeFile(path.join(data, "settings.json"), JSON.stringify({ shellMode: "clean" }));
 // This is a normal executable launch. Unlike Playwright's Electron launcher,
 // no --no-sandbox flag is added, so this checks the distributed runtime too.
 const child = spawn(executable, ["--remote-debugging-port=0"], {
-  env: { ...process.env, MINIMAL_DATA_DIR: data },
+  env: { ...process.env, PATH: bin, MINIMAL_DATA_DIR: data },
   stdio: ["ignore", "pipe", "pipe"],
 });
 const exit = once(child, "exit");
@@ -53,6 +62,8 @@ try {
     await page.evaluate(() => typeof (globalThis as any).require),
     "undefined",
   );
+  const manifest = JSON.parse(await readFile(path.join(path.dirname(executable), "resources/app/package.json"), "utf8"));
+  assert.match(manifest.version, /^\d+\.\d+\.\d+/);
   await page.evaluate(async (root) => {
     const state = await window.minimal.createSession(
       "Runtime verification",
@@ -103,7 +114,7 @@ try {
     before.sessions[0].terminals.map((t) => t.pid).sort(),
   );
   console.log(
-    `Packaged app passed: sandboxed renderer, 12 active output-producing terminals, 12 tab switches in ${latency} ms, clean GUI exit, all processes survive.`,
+    `Packaged app ${manifest.version} passed: sandboxed renderer, no global Node/npm on PATH, 12 active output-producing terminals, 12 tab switches in ${latency} ms, clean GUI exit, all processes survive.`,
   );
 } finally {
   await browser?.close().catch(() => {});

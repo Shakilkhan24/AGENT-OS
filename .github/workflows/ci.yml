@@ -101,7 +101,7 @@ jobs:
         run: npm ci
 
       - name: Build packaged runtime
-        run: npm run package
+        run: xvfb-run --auto-servernum npm run package
 
       - name: Packaged smoke
         env:
