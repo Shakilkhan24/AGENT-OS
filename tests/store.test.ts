@@ -46,25 +46,11 @@ test("v1 migrates once to v2, preserves original bytes, IDs and command intents"
     (await readdir(root)).filter((name) => name.includes("backup")).length,
     1,
   );
-  await writeFile(path.join(root, "state.json"), '{"version":99}');
-  // A v99 state.json is no longer fatal: the file is preserved on disk and
-  // the in-memory state falls back to the empty default. `recoveredFromInvalid`
-  // exposes the reason so the caller can surface a toast.
-  const recovered = await store.load();
-  assert.equal(recovered.version, 2);
-  assert.equal(recovered.sessions.length, 0);
-  assert.match(
-    store.recoveredFromInvalid ?? "",
-    /Saved state could not be read; original file preserved\./,
-  );
-  assert.equal(
-    await readFile(path.join(root, "state.json"), "utf8"),
-    '{"version":99}',
-  );
+  await store.close();
 });
 
-test("recovery preserves malformed and future-schema bytes through edits and restart", async (t) => {
-  for (const original of [Buffer.from([123, 0xff, 0xfe]), Buffer.from('{"version":99,"sessions":["precious"]}')]) {
+test("recovery preserves malformed bytes through edits and restart", async (t) => {
+  for (const original of [Buffer.from([123, 0xff, 0xfe])]) {
     const root = await mkdtemp(path.join(tmpdir(), "minimal-recovery-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     await writeFile(path.join(root, "state.json"), original);
@@ -89,4 +75,36 @@ test("a conflicting recovery backup prevents writable fallback", async (t) => {
   await writeFile(path.join(root, `state.recovery-${digest}.backup.json`), "partial backup");
   await assert.rejects(new Store(root).load(), /backup contents differ/);
   assert.equal(await readFile(path.join(root, "state.json"), "utf8"), original);
+});
+
+
+test("newer schemas refuse writes even after a caught load error or a restart", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "minimal-future-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new Store(root);
+  const valid = await store.load();
+  const original = '{"version":99,"sessions":["precious"],"newField":true}';
+  await writeFile(path.join(root, "state.json"), original);
+  for (const candidate of [store, new Store(root)]) {
+    await assert.rejects(candidate.load(), error => error instanceof Error &&
+      "failure" in error && (error.failure as { code: string }).code === "VERSION_MISMATCH");
+    assert.equal(candidate.recoveredFromInvalid, undefined);
+    await assert.rejects(candidate.save(valid), /not writable/);
+    await candidate.close();
+    assert.equal(await readFile(path.join(root, "state.json"), "utf8"), original);
+    assert.deepEqual(await readdir(root), ["state.json"]);
+  }
+});
+
+test("unloaded and unreadable stores cannot save an empty replacement", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "minimal-unreadable-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const valid = await new Store(root).load();
+  const store = new Store(root);
+  await assert.rejects(store.save(valid), /not writable/);
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.join(root, "state.json"));
+  await assert.rejects(store.load());
+  await assert.rejects(store.save(valid), /not writable/);
+  await store.close();
 });

@@ -5,6 +5,7 @@ import type { State } from "../shared/types";
 import { legacyStateSchema, stateSchema } from "../shared/models";
 import { atomicJson, type Durability } from "./atomic";
 import { Debouncer } from "./debouncer";
+import { AppError } from "../shared/errors";
 export { nameSchema, presetSchema } from "../shared/models";
 
 function emptyState(): State {
@@ -16,6 +17,7 @@ function emptyState(): State {
 export class Store {
   private readonly file: string;
   private readonly writes: Debouncer<State>;
+  private writable = false;
   recoveredFromInvalid?: string;
   constructor(readonly directory: string, options: { debounceMs?: number; durability?: Durability } = {}) {
     this.file = path.join(directory, "state.json");
@@ -42,25 +44,34 @@ export class Store {
     return backup;
   }
   async load(): Promise<State> {
+    this.writable = false;
     this.recoveredFromInvalid = undefined;
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     let original: Buffer;
     try { original = await readFile(this.file); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      this.writable = true;
       return emptyState();
     }
     let next: State;
     let migrate = false;
     try {
       const raw = JSON.parse(original.toString("utf8"));
+      if (typeof raw?.version === "number" && raw.version > 2) {
+        throw new AppError("VERSION_MISMATCH",
+          `This workspace uses state schema ${raw.version}; this app supports up to 2. Open it with a compatible newer MINIMAL release. No workspace data was changed.`,
+          { sourceId: "store" });
+      }
       migrate = raw?.version === 1;
       next = migrate ? stateSchema.parse({ ...legacyStateSchema.parse(raw), version: 2,
         envProfiles: [], hooks: [], launches: [] }) : stateSchema.parse(raw);
-    } catch {
+    } catch (error) {
+      if (error instanceof AppError) throw error;
       // Backup failure is fatal: never enable writes over an unprotected original.
       const backup = await this.backup(original, "recovery");
       this.recoveredFromInvalid = `Saved state could not be read; original file preserved. Recovery copy: ${backup}. Opened an empty workspace; saved commands were not replayed.`;
+      this.writable = true;
       return emptyState();
     }
     if (migrate) {
@@ -68,9 +79,14 @@ export class Store {
       // I/O failures here must not be mistaken for corrupt user data.
       await atomicJson(this.file, next);
     }
+    this.writable = true;
     return next;
   }
-  save(state: State): Promise<void> { return this.writes.schedule(stateSchema.parse(state)); }
+  save(state: State): Promise<void> {
+    if (!this.writable) return Promise.reject(new AppError("UNAVAILABLE",
+      "Workspace is not writable: a supported state must load successfully first.", { sourceId: "store" }));
+    return this.writes.schedule(stateSchema.parse(state));
+  }
   flush(): Promise<void> { return this.writes.flush(); }
   close(): Promise<void> { return this.writes.close(); }
 }

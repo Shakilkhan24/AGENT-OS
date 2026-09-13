@@ -278,6 +278,7 @@ else {
         "MINIMAL could not start",
         String(error.message || error),
       );
+      if (!workspace) { app.exit(1); return; }
       app.quit();
     });
 }
