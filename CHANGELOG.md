@@ -11,6 +11,7 @@ M1 runtime foundation, in progress.
 - Refresh workspace state from committed event hints so terminal exit status appears promptly, retaining polling as a fallback.
 - Add an authenticated local socket transport with bounded framing, per-connection cancellation, slow-peer protection and explicit disconnect uncertainty; runtime deployment remains pending.
 - Consolidate domain operations in an Electron-independent workspace used by the desktop facade and headless socket tests. Bind attachment control to its connection and preserve accepted batches across observer disconnects.
+- Split sidebar/search and workspace dialogs out of `App.tsx`; preserve keyboard/selection behavior and show the actual application version in the UI.
 
 ## [1.2.2] - 2026-09-13
 

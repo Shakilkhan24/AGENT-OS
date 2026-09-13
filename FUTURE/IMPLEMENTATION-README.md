@@ -1,6 +1,6 @@
 # MINIMAL — implementation roadmap from v1.2.1 to the FUTURE system
 
-Execution revision 3 · 2026-09-13 · Baseline commit `3d96f78` · **M0 complete as v1.2.2; M1 in progress on `feat/m1-runtime`.**
+Execution revision 3 · 2026-09-14 · Baseline commit `3d96f78` · **M0 complete as v1.2.2; M1 in progress on `feat/m1-runtime`.**
 
 Start with the existing terminal application. Establish independent runtime ownership and transactional state, then complete one managed repair with trustworthy review evidence. Extend that same execution path into reusable capabilities, coordinated work, workflows, schedules and owned remote hosts. Keep ordinary terminals available throughout.
 

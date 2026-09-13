@@ -6,6 +6,7 @@ import type { Hook } from "./hooks";
 import type { LaunchRecord, SessionMetadata } from "./models";
 import type { DomainEvent, StopPolicy } from "./events";
 import type { Failure } from "./errors";
+import type { Result } from "./protocol";
 export type { EnvProfile, Hook, SessionMetadata };
 export interface Preset {
   id: string;
@@ -92,6 +93,7 @@ export interface Snapshot {
 }
 export type { FileEntry, FilePreview, FileAction } from "./files";
 export interface API {
+  getAppInfo(): Promise<Result<"hello">>;
   getSettings(): Promise<Settings>;
   listDrafts(): Promise<DraftSummary[]>;
   readDraft(id: string): Promise<Draft>;

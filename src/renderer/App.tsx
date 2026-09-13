@@ -1,16 +1,7 @@
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import {
-  ArrowUpRight,
   Check,
   ChevronRight,
-  CircleHelp,
   Command,
   Folder,
   FolderOpen,
@@ -20,19 +11,12 @@ import {
   RotateCw,
   Pencil,
   Plus,
-  Search,
-  Settings2,
   TerminalSquare,
   Trash2,
   X,
   Zap,
 } from "lucide-react";
-import type {
-  LaunchRequest,
-  Preset,
-  Snapshot,
-  TerminalView,
-} from "../shared/types";
+import type { LaunchRequest, Preset, Snapshot, TerminalView } from "../shared/types";
 import { FilePanel } from "./FilePanel";
 import { TerminalTabs } from "./TerminalTabs";
 import { LaunchDialog } from "./LaunchDialog";
@@ -40,15 +24,8 @@ import { useWorkspace } from "./useWorkspace";
 const Terminal = lazy(() =>
   import("./Terminal").then((module) => ({ default: module.Terminal })),
 );
-import { Field, Modal } from "./components";
-type Dialog =
-  | "create"
-  | "rename"
-  | "delete"
-  | "launch"
-  | "terminal-name"
-  | "presets"
-  | "help";
+import { SessionSidebar } from "./SessionSidebar";
+import { WorkspaceDialog, type Dialog } from "./WorkspaceDialog";
 export function App() {
   const [sessionId, setSessionId] = useState(
     localStorage.getItem("minimal.session") || "",
@@ -83,8 +60,8 @@ export function App() {
   useEffect(() => {
     localStorage.setItem("minimal.terminals", JSON.stringify(terminalIds));
   }, [terminalIds]);
-  const [query, setQuery] = useState("");
   const [error, setError] = useState("");
+  const [version, setVersion] = useState("");
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<Dialog>();
   const [directory, setDirectory] = useState("");
@@ -99,6 +76,11 @@ export function App() {
       ),
     [],
   );
+  useEffect(() => {
+    let active = true;
+    void window.minimal.getAppInfo().then(info => { if (active) setVersion(info.appVersion); }).catch(report);
+    return () => { active = false; };
+  }, [report]);
   const { snapshot, ready, accept } = useWorkspace(report);
   // Surface a recovery notice (e.g. malformed state.json) from the main
   // process through the same toast channel IPC errors use.
@@ -236,111 +218,10 @@ export function App() {
       setClosing(new Set(closingRef.current));
     }
   };
-  const filtered = snapshot.sessions.filter((s) =>
-    `${s.name} ${s.directory}`.toLowerCase().includes(query.toLowerCase()),
-  );
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-icon">
-            <Command size={20} />
-          </span>
-          <span>
-            MINIMAL<span className="version">v1</span>
-          </span>
-        </div>
-        <div className="workspace-label">
-          YOUR WORKSPACE
-          <span className="dot live" />
-        </div>
-        <div className="session-section">
-          <span>Sessions</span>
-          <span className="count">{snapshot.sessions.length}</span>
-          <button
-            className="icon-button"
-            aria-label="Create session"
-            onClick={() => openDialog("create")}
-          >
-            <Plus size={16} />
-          </button>
-        </div>
-        <label className="search-box">
-          <Search size={14} />
-          <input
-            aria-label="Search sessions"
-            placeholder="Find a session…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <kbd>⌕</kbd>
-        </label>
-        <nav className="session-list" aria-label="Sessions">
-          {filtered.map((item) => (
-            <button
-              key={item.id}
-              className={`session-card ${session?.id === item.id ? "active" : ""}`}
-              onClick={() => selectSession(item.id)}
-            >
-              <span className="session-card-title">
-                <Folder size={16} />
-                <strong>{item.name}</strong>
-                <span
-                  className={`dot ${item.terminals.some((t) => t.status === "running") ? "live" : ""}`}
-                />
-              </span>
-              <span className="session-directory" title={item.directory}>
-                {item.directory}
-              </span>
-              <span className="session-meta">
-                <TerminalSquare size={12} />
-                {item.terminals.length} terminal
-                {item.terminals.length !== 1 ? "s" : ""}
-                <span>
-                  {snapshot.engineError
-                    ? "Status unavailable"
-                    : `${item.terminals.filter((t) => t.status === "running").length} running`}
-                </span>
-              </span>
-            </button>
-          ))}
-          {ready && filtered.length === 0 && (
-            <p className="sidebar-empty">
-              {query ? "No matching sessions." : "A fresh space for your work."}
-            </p>
-          )}
-        </nav>
-        <button className="new-session" onClick={() => openDialog("create")}>
-          <Plus size={16} />
-          New session
-        </button>
-        <div className="sidebar-bottom">
-          <div className="persistence-note">
-            <span className="persistence-icon">
-              <Layers2 size={18} />
-            </span>
-            <div>
-              <strong>Your work stays alive.</strong>
-              <p>Close the window. Pick up later.</p>
-            </div>
-          </div>
-          <button className="nav-button" onClick={() => openDialog("presets")}>
-            <Settings2 size={16} />
-            Launch presets
-            <ChevronRight size={14} />
-          </button>
-          <button className="nav-button" onClick={() => openDialog("help")}>
-            <CircleHelp size={16} />
-            How it works
-            <ArrowUpRight size={14} />
-          </button>
-        </div>
-        <div className="sidebar-status">
-          <span className={`dot ${snapshot.engineError ? "" : "live"}`} />
-          {snapshot.engineError ? "Connection issue" : "Local workspace"}
-          <span>FOUNDATION</span>
-        </div>
-      </aside>
+      <SessionSidebar snapshot={snapshot} selectedId={session?.id} ready={ready} version={version}
+        selectSession={selectSession} openDialog={openDialog} />
       <main className="main">
         <header className="topbar">
           <div className="topbar-crumb">
@@ -590,7 +471,7 @@ export function App() {
             {session
               ? `${session.terminals.length} terminals in this session`
               : "A quieter way to manage your work"}
-            <span className="footer-separator">·</span>MINIMAL 1.1
+            <span className="footer-separator">·</span>MINIMAL {version}
           </span>
         </footer>
       </main>
@@ -605,233 +486,10 @@ export function App() {
         />
       )}
       {dialog && dialog !== "launch" && (
-        <Modal
-          title={
-            {
-              create: "Create a session",
-              rename: "Rename session",
-              delete: "Delete this session?",
-              "terminal-name": "Rename terminal",
-              presets: "Launch presets",
-              help: "A home for running work.",
-            }[dialog]
-          }
-          subtitle={
-            {
-              create: "Bind a project directory to a persistent workspace.",
-              rename: "Make this workspace easy to recognize.",
-              delete:
-                "All terminals in this session will be stopped. Project files will be kept.",
-              "terminal-name": "A label that tells you what is running.",
-              presets: "Your tools, your commands. Add any workflow you use.",
-              help: "A few things to help you feel at home.",
-            }[dialog]
-          }
-          close={() => setDialog(undefined)}
-          busy={busy}
-          error={error}
-        >
-          {dialog === "help" ? (
-            <div className="help-content">
-              <p>
-                <strong>Sessions organize a folder and its terminals.</strong>{" "}
-                Switch freely between projects. Running work continues in the
-                background.
-              </p>
-              <p>
-                <strong>Closing the window detaches the view.</strong> Processes
-                and terminal history live in a private tmux server. Reopening
-                reconnects to surviving work. A reboot or stopped WSL instance
-                ends those processes; missing terminals are shown without
-                rerunning commands.
-              </p>
-              <p>
-                <strong>Launch any command.</strong> Enter codex, claude,
-                opencode, pi, or any installed command. Leave it empty for a
-                Bash shell. Save commands as presets and launch up to 32
-                terminals at once.
-              </p>
-              <p>
-                <strong>Add and close terminals freely.</strong> Use + New
-                terminal at any time. Each tab’s × stops and removes just that
-                terminal. Edit &amp; run opens its command for another launch.
-                Reconnect restores a terminal connection without restarting its
-                process.
-              </p>
-              <p>
-                <strong>The explorer stays inside your session folder.</strong>{" "}
-                Double-click to open folders or text files. Select an item to
-                rename, move, or delete it. Symlinks and special files are
-                blocked. Terminal commands run with your normal user
-                permissions.
-              </p>
-              <p>
-                <strong>Terminal basics.</strong> Type normally, use Ctrl+C to
-                interrupt, and scroll with the mouse wheel. Ctrl+Shift+C /
-                Ctrl+Shift+V copy and paste; right-click copies a selection or
-                pastes.
-              </p>
-              <button className="primary" onClick={() => setDialog(undefined)}>
-                Got it
-                <Check size={15} />
-              </button>
-            </div>
-          ) : (
-            <form onSubmit={submit}>
-              {(dialog === "create" ||
-                dialog === "rename" ||
-                dialog === "terminal-name") && (
-                <Field label="Name">
-                  <input
-                    name="name"
-                    autoFocus
-                    required
-                    maxLength={80}
-                    placeholder={
-                      dialog === "create" ? "e.g. Studio website" : ""
-                    }
-                    defaultValue={
-                      dialog === "rename"
-                        ? session?.name
-                        : dialog === "terminal-name"
-                          ? terminal?.label
-                          : ""
-                    }
-                  />
-                </Field>
-              )}
-              {dialog === "create" && (
-                <Field
-                  label="Working directory"
-                  hint="Choose the folder this session can browse and manage."
-                >
-                  <div className="directory-input">
-                    <input
-                      required
-                      value={directory}
-                      onChange={(event) => setDirectory(event.target.value)}
-                      placeholder="/home/you/projects/my-project"
-                    />
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={async () => {
-                        try {
-                          const value = await window.minimal.chooseDirectory();
-                          if (value) setDirectory(value);
-                        } catch (error) {
-                          report(error);
-                        }
-                      }}
-                    >
-                      <FolderOpen size={16} />
-                      Browse
-                    </button>
-                  </div>
-                </Field>
-              )}
-              {dialog === "presets" && (
-                <div className="presets-editor">
-                  {draftPresets.map((preset, index) => (
-                    <div className="preset-row" key={preset.id}>
-                      <div className="preset-number">
-                        {String(index + 1).padStart(2, "0")}
-                      </div>
-                      <div>
-                        <input
-                          aria-label={`Preset ${index + 1} name`}
-                          required
-                          maxLength={70}
-                          value={preset.name}
-                          placeholder="Workflow name"
-                          onChange={(event) =>
-                            setDraftPresets((items) =>
-                              items.map((p) =>
-                                p.id === preset.id
-                                  ? { ...p, name: event.target.value }
-                                  : p,
-                              ),
-                            )
-                          }
-                        />
-                        <textarea
-                          aria-label={`Preset ${index + 1} command`}
-                          rows={2}
-                          maxLength={8192}
-                          value={preset.command}
-                          placeholder="Empty = interactive Bash shell"
-                          spellCheck={false}
-                          onChange={(event) =>
-                            setDraftPresets((items) =>
-                              items.map((p) =>
-                                p.id === preset.id
-                                  ? { ...p, command: event.target.value }
-                                  : p,
-                              ),
-                            )
-                          }
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        aria-label={`Remove ${preset.name} preset`}
-                        disabled={draftPresets.length === 1}
-                        onClick={() =>
-                          setDraftPresets((items) =>
-                            items.filter((p) => p.id !== preset.id),
-                          )
-                        }
-                      >
-                        <X size={15} />
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() =>
-                      setDraftPresets((items) => [
-                        ...items,
-                        { id: crypto.randomUUID(), name: "", command: "" },
-                      ])
-                    }
-                  >
-                    <Plus size={14} />
-                    Add preset
-                  </button>
-                  <p className="form-note">
-                    Commands run with Bash in the selected directory. Tools must
-                    be installed on this machine. Existing terminals keep their
-                    original command.
-                  </p>
-                </div>
-              )}
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setDialog(undefined)}
-                  disabled={busy}
-                >
-                  Cancel
-                </button>
-                <button
-                  className={dialog === "delete" ? "danger" : "primary"}
-                  disabled={busy}
-                >
-                  {busy
-                    ? "Working…"
-                    : dialog === "create"
-                      ? "Create session"
-                      : dialog === "delete"
-                        ? "Stop terminals & delete"
-                        : "Save changes"}
-                </button>
-              </div>
-            </form>
-          )}
-        </Modal>
+        <WorkspaceDialog dialog={dialog} busy={busy} error={error} close={() => setDialog(undefined)}
+          submit={submit} sessionName={session?.name} terminalLabel={terminal?.label}
+          directory={directory} setDirectory={setDirectory} draftPresets={draftPresets}
+          setDraftPresets={setDraftPresets} report={report} />
       )}
     </div>
   );

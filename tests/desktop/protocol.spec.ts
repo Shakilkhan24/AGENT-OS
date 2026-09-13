@@ -14,6 +14,8 @@ test("a malformed terminal event is rejected and surfaces a visible protocol fai
   try {
     const page = await app.firstWindow();
     await expect(page.getByRole("heading", { name: "Your work, still running." })).toBeVisible();
+    const version = await app.evaluate(({ app }) => app.getVersion());
+    await expect(page.locator(".app-footer")).toContainText(`MINIMAL ${version}`);
     const changed = await page.evaluate(async root => {
       let notify!: () => void;
       const change = new Promise<void>(resolve => { notify = resolve; });

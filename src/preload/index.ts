@@ -35,6 +35,7 @@ async function call<M extends Method>(method: M, ...args: InputArgs<M>): Promise
   return invoke(method, ...args);
 }
 const api: API = {
+  getAppInfo: () => ready,
   getSettings: () => call("get-settings"),
   listDrafts: () => call("list-drafts"),
   readDraft: id => call("read-draft", id),
