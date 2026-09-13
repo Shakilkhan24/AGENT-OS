@@ -1,6 +1,6 @@
 # MINIMAL — implementation roadmap from v1.2.1 to the FUTURE system
 
-Planning revision 1 · 2026-09-13 · Baseline commit `3d96f78` · **Proposed implementation plan; no future features implemented in this pass.**
+Execution revision 2 · 2026-09-13 · Baseline commit `3d96f78` · **M0 complete as v1.2.2 on `feat/m0-foundation`; M1 is next.**
 
 Start with the existing terminal application. Establish independent runtime ownership and transactional state, then complete one managed repair with trustworthy review evidence. Extend that same execution path into reusable capabilities, coordinated work, workflows, schedules and owned remote hosts. Keep ordinary terminals available throughout.
 
@@ -29,7 +29,7 @@ These are capability checkpoints, not promised version numbers or dates. Assign 
 
 The inspected application is **1.2.1**, with JSON state schema **2**, file-worker protocol **2**, and settings schema **1**. These version numbers describe different contracts. Resolved dependencies include Electron 44.2.0, React 19.2.8, TypeScript 7.0.2, Vite 8.2.2, xterm 6.0.0 and Zod 4.5.4. Linux/WSL is the current support boundary.
 
-The [baseline snapshot](../docs/build-snapshot-v1.2.1.md) and [verification record](../docs/verification.md) report 73 backend and 89 desktop cases, build, package and packaged smoke passing on 2026-09-13. Those are prior execution results, not fresh test runs for this documentation pass. Relevant source was inspected; no provider was invoked or account exercised here.
+The [baseline snapshot](../docs/build-snapshot-v1.2.1.md) and [verification record](../docs/verification.md) report 73 backend and 89 desktop cases, build, package and packaged smoke passing on 2026-09-13. That baseline was reproduced before M0 implementation: 73 backend and 89 desktop cases, typecheck/build and packaged smoke passed in isolated profiles. The table below remains a historical starting position; current progress and new evidence follow in M0 and the verification record.
 
 | Area | Actual foundation | Remaining work and owner |
 | --- | --- | --- |
@@ -128,18 +128,20 @@ flowchart LR
     M8 --> Q
 ```
 
-M9 is a recurring release gate. Each milestone below is divided into small, integrated changes; finishing backend modules alone does not pass its exit gate. Checkboxes start unchecked because this pass produces a plan.
+M9 is a recurring release gate. Each milestone below is divided into small, integrated changes; finishing backend modules alone does not pass its exit gate. Check boxes only when the integrated behavior and its evidence exist. Runtime experiments and provider discovery do not count as shipped managed execution.
 
 ### M0 — establish the remaining prerequisites
 
 **Entry:** the v1.2.1 baseline and preserved user workspace. **Why first:** new processes and schemas make packaging, test discovery and upgrade mistakes much harder to recover from.
 
-- [ ] M0.1 Record the starting commit, resolved runtime/dependency versions, current schema files and private tmux namespace. Reproduce the existing checks in isolated profiles when implementation begins; preserve their evidence in `docs/verification.md`.
-- [ ] M0.2 Extend backend and desktop discovery before adding nested tests. Have CI list discovered cases and demonstrate that a newly added nested regression runs. Retain the Python and real-tmux coverage; do not confuse compilation with execution.
-- [ ] M0.3 Implement clean release staging and smoke that exact candidate. Publish immutable version directories through a same-filesystem atomic locator/symlink switch; retain the previous release. Avoid renaming over a populated directory or calling two renames one atomic operation. Test interruption and stale-asset absence.
-- [ ] M0.4 Add explicit future-schema refusal/recovery mode before migration. Preserve the existing corruption backups. Separate unreadable data from a deliberately newer schema; neither may silently create writable migrated state.
-- [ ] M0.5 Verify essential keyboard/focus behavior and acknowledged draft recovery. Repair concrete failures; only durably acknowledged checkpoints are promised after a crash. Record the remaining save-versus-external-writer race and WSL move interruption behavior.
-- [ ] M0.6 Run three bounded spikes: independently packaged runtime/supervision; patched SQLite driver plus OS-lock support; provider transport/lifecycle capability comparison. Produce choices, rejected alternatives and reproducible fixtures in the relevant existing architecture/verification documents. Provider trials need authorized account use; synthetic fixtures keep other work moving.
+- [x] M0.1 Record the starting commit, resolved runtime/dependency versions, current schema files and private tmux namespace. Reproduce the existing checks in isolated profiles when implementation begins; preserve their evidence in `docs/verification.md`.
+- [x] M0.2 Extend backend and desktop discovery before adding nested tests. Have CI list discovered cases and demonstrate that a newly added nested regression runs. Retain the Python and real-tmux coverage; do not confuse compilation with execution.
+- [x] M0.3 Implement clean release staging and smoke that exact candidate. Publish immutable version directories through a same-filesystem atomic locator/symlink switch; retain the previous release. Avoid renaming over a populated directory or calling two renames one atomic operation. Test interruption and stale-asset absence.
+- [x] M0.4 Add explicit future-schema refusal/recovery mode before migration. Preserve the existing corruption backups. Separate unreadable data from a deliberately newer schema; neither may silently create writable migrated state.
+- [x] M0.5 Verify essential keyboard/focus behavior and acknowledged draft recovery. Repair concrete failures; only durably acknowledged checkpoints are promised after a crash. Record the remaining save-versus-external-writer race and WSL move interruption behavior.
+- [x] M0.6 Run three bounded spikes: independently packaged runtime/supervision; patched SQLite driver plus OS-lock support; provider transport/lifecycle capability comparison. Produce choices, rejected alternatives and reproducible fixtures in the relevant existing architecture/verification documents. Authenticated provider trials need authorized account use; perform those as the explicit M3/M4 qualification gate. M0 compares documented and installed transport/lifecycle capabilities without submitting work, while synthetic fixtures keep other work moving.
+
+**Execution note (1.2.2):** [Architecture decisions and reproducible probes](../docs/architecture.md#m0-runtime-and-storage-decision--2026-09-13) choose the packaged Electron binary in Node mode, `node:sqlite` in a bounded worker, a stable OS lock and separately preserved tmux execution. Detached and transient user-service probes passed. Codex 0.154.0 and Claude 2.1.268 help/version discovery is recorded without account use; native invocation/replay/permission behavior remains unqualified until M3/M4. This deliberately bounds M0 instead of building and certifying an adapter before the runtime exists.
 
 **Gate:** baseline checks pass, nested tests are discovered, a clean staged package works without global Node, unsupported schemas refuse writes, and the runtime/storage spike can start, stop and recover on the supported Linux/WSL path. No active user profile is migrated by a spike. Estimates follow these results; the old day-by-day schedule is retired.
 

@@ -2,6 +2,19 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-09-13
+
+M0 compatibility and packaging prerequisites for the FUTURE roadmap.
+
+- Discover backend and desktop tests recursively; list both suites in CI.
+- Build into clean output and fresh release staging, smoke the exact candidate without global Node/npm, then atomically select an immutable build. Retain a previous build for explicit rollback. Preserve legacy release directories.
+- Refuse newer state schemas and all saves after failed/unreadable initialization. Preserve malformed-state recovery backups and existing version-1 migration.
+- Add roving terminal-tab keyboard navigation and accessible dialog names/focus restoration.
+- Test acknowledged Unicode drafts after SIGKILL, publication interruptions and stale assets.
+- Add isolated packaged runtime/SQLite and OS-lock experiments, including real tmux survival under detached and user-service ownership. Add read-only provider capability discovery that explicitly distinguishes advertised features from verified support.
+
+The runtime experiments do not migrate profiles or move production ownership out of Electron. Live provider qualification, transactional application storage and managed execution remain later milestones. See [verification](docs/verification.md) and the [roadmap](FUTURE/IMPLEMENTATION-README.md).
+
 ## [1.2.1] - 2026-09-13
 
 Bug-fix baseline after the [source review](docs/review-2026-09-12.md).
