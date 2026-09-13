@@ -10,7 +10,3 @@ cmd.sh
 .env.*
 !.env.example
 .minimal-*-test-*/
-
-# Planning material for v1.3+ work. Tracked separately; not part of the
-# released v1.2 source. Move out of FUTURE/ before removing this line.
-FUTURE/
