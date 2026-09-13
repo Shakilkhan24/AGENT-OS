@@ -107,3 +107,6 @@ jobs:
         env:
           CI: "1"
         run: xvfb-run --auto-servernum npm run test:package
+
+      - name: Packaged headless runtime and storage probe
+        run: npm run test:runtime

@@ -14,6 +14,8 @@
     "package": "npm run build && node --import tsx scripts/package.mjs",
     "package:rollback": "node --import tsx scripts/package.mjs --rollback",
     "test:package": "tsx tests/package-smoke.ts",
+    "test:runtime": "tsx scripts/runtime-spike.mts",
+    "probe:providers": "tsx scripts/provider-probe.mts",
     "bench": "tsx scripts/bench.mts",
     "hooks:install": "node scripts/install-hooks.mjs",
     "hooks:uninstall": "node scripts/install-hooks.mjs --uninstall"
