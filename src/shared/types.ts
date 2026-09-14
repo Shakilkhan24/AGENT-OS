@@ -7,6 +7,7 @@ import type { LaunchRecord, SessionMetadata } from "./models";
 import type { DomainEvent, StopPolicy } from "./events";
 import type { Failure } from "./errors";
 import type { Result } from "./protocol";
+import type { ManagedProjectionOrUnavailable } from "./managed-view";
 export type { EnvProfile, Hook, SessionMetadata };
 export interface Preset {
   id: string;
@@ -90,6 +91,14 @@ export interface Snapshot {
   envProfiles?: EnvProfile[];
   hooks?: Hook[];
   launches?: LaunchRecord[];
+  /**
+   * M3c.1 — opt-in projection of M3a/M3b entities onto the snapshot.
+   * Undefined when the runtime is degraded, the DB driver is opted-out,
+   * or the projection itself can't be built for some other reason. The
+   * renderer treats `undefined` as "managed work unavailable" and
+   * switches to the existing M2 surface.
+   */
+  managed?: ManagedProjectionOrUnavailable;
 }
 export type { FileEntry, FilePreview, FileAction } from "./files";
 export interface API {

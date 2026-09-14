@@ -6,6 +6,7 @@ import type { TerminalRecord } from "../src/shared/types";
 import { SessionService } from "../src/main/service";
 import { SessionFilesystem } from "../src/main/filesystem";
 import { Store } from "../src/main/store";
+import { type OwnedDb, openManagedDatabase } from "../src/runtime/db-owner";
 
 export class EngineDouble implements EngineAdapter {
   readonly capabilities = { id: "test", platforms: ["linux"], persistent: true, environment: true, pushStatus: false, processTree: false };
@@ -43,4 +44,23 @@ export function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
+}
+/**
+ * Build an in-memory `OwnedDb` for tests that need to wire a
+ * `RuntimeWorkspace` but don't care about M3 entities. The factory
+ * applies the schema via `openManagedDatabase`, then closes the worker
+ * on the returned handle's `close()`.
+ */
+export async function ownedDbFixture(): Promise<OwnedDb> {
+  const base = await mkdtemp(path.join(tmpdir(), "minimal-owned-db-"));
+  return openManagedDatabase(base, path.join(base, "runtime")).then(async owned => {
+    // Replace the factory's `close` with one that also removes the temp
+    // directory so tests don't leak on shutdown.
+    const originalClose = owned.close.bind(owned);
+    owned.close = async () => {
+      await originalClose();
+      await rm(base, { recursive: true, force: true });
+    };
+    return owned;
+  });
 }

@@ -110,6 +110,13 @@ export async function listLeasesForWorkspace(worker: DbWorker, workspaceId: stri
   return rows.map(parseLeaseRow);
 }
 
+/** Flat lister over every lease in the workspace. Used by M3c.1 projections. */
+export async function listLeases(worker: DbWorker): Promise<Lease[]> {
+  const driver = driverOf(worker);
+  const rows = driver.prepare("SELECT * FROM lease ORDER BY acquired_at ASC").all();
+  return rows.map(parseLeaseRow);
+}
+
 export async function readActiveLease(worker: DbWorker, workspaceId: string): Promise<Lease | undefined> {
   const driver = driverOf(worker);
   const row = driver.prepare("SELECT * FROM lease WHERE workspace_id = ? AND state = 'held' ORDER BY acquired_at DESC LIMIT 1")

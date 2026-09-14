@@ -60,6 +60,11 @@ function shallowEqual(a: Snapshot, b: Snapshot): boolean {
   if (a.sequence === b.sequence) return true;
   if (a.presets !== b.presets || a.sessions.length !== b.sessions.length) return false;
   if (a.engineError !== b.engineError || a.envProfiles !== b.envProfiles || a.hooks !== b.hooks || a.launches !== b.launches) return false;
+  // M3c.1: treat the `managed` projection block as identity-compared so the
+  // managed review shell re-renders only when M3 state actually changes.
+  // The projection is rebuilt as a fresh object each snapshot, so reference
+  // equality is the right (cheap) signal here.
+  if (a.managed !== b.managed) return false;
   for (let i = 0; i < a.sessions.length; i++) {
     const left = a.sessions[i];
     const right = b.sessions[i];

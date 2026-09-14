@@ -26,6 +26,7 @@ const Terminal = lazy(() =>
 );
 import { SessionSidebar } from "./SessionSidebar";
 import { WorkspaceDialog, type Dialog } from "./WorkspaceDialog";
+import { ManagedReview } from "./ManagedReview";
 export function App() {
   const [sessionId, setSessionId] = useState(
     localStorage.getItem("minimal.session") || "",
@@ -49,6 +50,13 @@ export function App() {
   });
   const [explorerVisible, setExplorerVisible] = useState(
     localStorage.getItem("minimal.explorer") !== "hidden",
+  );
+  // M3c.1 — read-only managed review shell toggle. Mirrors the explorer
+  // visibility toggle: persistent across reloads, off by default. When on,
+  // the SessionSidebar is replaced by ManagedReview (the existing M2
+  // session surface is restored by toggling off).
+  const [managedMode, setManagedMode] = useState(
+    localStorage.getItem("minimal.managed") === "on",
   );
   const [launchInitial, setLaunchInitial] = useState<LaunchRequest>({
     command: "",
@@ -234,8 +242,12 @@ export function App() {
   };
   return (
     <div className="app-shell">
-      <SessionSidebar snapshot={snapshot} selectedId={session?.id} ready={ready} version={version}
-        selectSession={selectSession} openDialog={openDialog} />
+      {managedMode ? (
+        <ManagedReview managed={snapshot.managed} />
+      ) : (
+        <SessionSidebar snapshot={snapshot} selectedId={session?.id} ready={ready} version={version}
+          selectSession={selectSession} openDialog={openDialog} />
+      )}
       <main className="main">
         <header className="topbar">
           <div className="topbar-crumb">
@@ -306,6 +318,25 @@ export function App() {
                 </div>
               </div>
               <div className="session-actions">
+                <button
+                  className={`icon-button ${managedMode ? "active" : ""}`}
+                  aria-label={managedMode ? "Hide managed review" : "Show managed review"}
+                  aria-pressed={managedMode}
+                  title={
+                    managedMode
+                      ? "Switch back to the session sidebar"
+                      : "Open the managed work review shell (M3c)"
+                  }
+                  onClick={() =>
+                    setManagedMode((value) => {
+                      const next = !value;
+                      localStorage.setItem("minimal.managed", next ? "on" : "off");
+                      return next;
+                    })
+                  }
+                >
+                  <Layers2 size={17} />
+                </button>
                 <button
                   className="icon-button"
                   aria-label={

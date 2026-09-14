@@ -169,6 +169,13 @@ export async function readActiveReceiptForRun(worker: DbWorker, runId: string): 
   return row ? parseReceiptRow(row) : undefined;
 }
 
+/** Flat lister over every receipt row. Used by the M3c.1 review shell. */
+export async function listContextReceipts(worker: DbWorker): Promise<ContextReceipt[]> {
+  const driver = driverOf(worker);
+  const rows = driver.prepare("SELECT * FROM context_receipt ORDER BY created_at ASC").all();
+  return rows.map(parseReceiptRow);
+}
+
 const TRANSITION_INPUT = z.object({
   to: receiptStatusSchema,
   by: z.string().min(1).max(256).optional(),

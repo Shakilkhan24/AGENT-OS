@@ -7,7 +7,7 @@ import { RuntimeWorkspace } from "../../src/runtime/workspace";
 import { ControlServer } from "../../src/runtime/control-server";
 import { ControlClient } from "../../src/runtime/control-client";
 import { configureLogging } from "../../src/main/logging";
-import { serviceFixture, deferred } from "../support";
+import { serviceFixture, deferred, ownedDbFixture } from "../support";
 import { DraftStore } from "../../src/main/draft-store";
 import { defaultSettings } from "../../src/shared/settings";
 import { API_VERSION, type Request } from "../../src/shared/protocol";
@@ -68,8 +68,9 @@ test("headless socket workflow edits files, restores drafts and reconnects to th
 
 test("disconnect drains an accepted batch without cancelling its later members", { timeout: 10000 }, async t => {
   const f = await serviceFixture(), entered = deferred(), gate = deferred();
-  const workspace = new RuntimeWorkspace(f.service, new DraftStore(f.store.directory), defaultSettings, null, "1.2.2");
-  t.after(async () => { gate.resolve(); await workspace.close(); await f.cleanup(); });
+  const ownedDb = await ownedDbFixture();
+  const workspace = new RuntimeWorkspace(f.service, new DraftStore(f.store.directory), defaultSettings, null, "1.2.2", ownedDb);
+  t.after(async () => { gate.resolve(); await workspace.close(); await ownedDb.close(); await f.cleanup(); });
   f.engine.beforeCreate = async () => { entered.resolve(); await gate.promise; };
   const endpoint = workspace.connect({ connectionId: crypto.randomUUID(), profileKey: "a".repeat(20), principal: "desktop" }, () => {});
   const request: Request = { apiVersion: API_VERSION, id: crypto.randomUUID(), correlationId: crypto.randomUUID(),

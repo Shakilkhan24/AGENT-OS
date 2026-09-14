@@ -1,0 +1,347 @@
+/*
+ * M3c.1 — read-only review shell styles.
+ *
+ * The shell sits where `SessionSidebar` normally sits, so it inherits
+ * the same `256px` width budget split three ways: 220 list, flex detail,
+ * 280 stream. The exact split is tuned for ~1024 viewport widths; on
+ * narrower viewports the detail pane truncates with ellipsis instead of
+ * clipping.
+ *
+ * The dot palette mirrors `colourForStreamType()` from
+ * `runtime/managed-stream-types.ts`; keep them in sync.
+ */
+.managed-review {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 280px;
+  width: 256px;
+  min-width: 256px;
+  border-right: 1px solid #303830;
+  background: #1a1f1b;
+  color: #dce1dc;
+  font-size: 12px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.managed-review.unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 28px 22px;
+  gap: 12px;
+  width: 280px;
+  min-width: 280px;
+}
+.managed-review.unavailable h2 {
+  margin: 0;
+  font-size: 16px;
+  color: #f1f4ef;
+}
+.managed-review.unavailable p {
+  margin: 0;
+  color: #95a08f;
+  line-height: 1.55;
+}
+.managed-review.unavailable .reason {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #c89191;
+}
+.managed-review.unavailable .reason code {
+  background: #232924;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.managed-list,
+.managed-detail,
+.managed-stream {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  outline: none;
+}
+
+.managed-list {
+  border-right: 1px solid #2a302c;
+  background: #181c19;
+}
+.managed-detail {
+  border-right: 1px solid #2a302c;
+  background: #181c19;
+  min-width: 0;
+}
+.managed-stream {
+  background: #181c19;
+}
+
+.managed-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #2a302c;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: #9ba597;
+  text-transform: uppercase;
+}
+.managed-column-header > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.managed-column-meta {
+  font-size: 10px;
+  color: #6e7a6b;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.managed-list.focused,
+.managed-detail.focused {
+  background: #1d221f;
+}
+
+.managed-empty {
+  margin: 14px;
+  font-size: 11.5px;
+  color: #7c867f;
+  line-height: 1.55;
+}
+
+/* task list */
+.managed-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.managed-list > ul {
+  overflow-y: auto;
+  padding: 6px 0 12px;
+}
+.managed-project-group {
+  margin-bottom: 10px;
+}
+.managed-project-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 14px 4px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: #95a08f;
+  text-transform: uppercase;
+}
+.managed-task-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: transparent;
+  border: 0;
+  color: #d4dacf;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.managed-task-row:hover {
+  background: #1f2521;
+}
+.managed-task-row[data-selected="true"] {
+  background: #232924;
+  border-left-color: var(--accent);
+}
+.managed-task-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.managed-task-status {
+  font-size: 9.5px;
+  color: #7c867f;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.managed-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7c867f;
+}
+.managed-status-running { color: #c5edaa; }
+.managed-status-ready { color: #9bd1ff; }
+.managed-status-completed { color: #c5edaa; }
+.managed-status-spawned { color: #9bd1ff; }
+.managed-status-admitted { color: #c5edaa; }
+.managed-status-failed { color: #e89090; }
+.managed-status-stalled { color: #e8c87b; }
+.managed-status-halted { color: #e8c87b; }
+.managed-status-dispatched { color: #c5edaa; }
+.managed-status-claimed { color: #9bd1ff; }
+.managed-status-accepted { color: #9bd1ff; }
+.managed-status-rejected { color: #e89090; }
+.managed-status-resolved { color: #c5edaa; }
+.managed-status-dismissed { color: #7c867f; }
+.managed-status-imported { color: #9bd1ff; }
+.managed-status-held { color: #c5edaa; }
+
+/* detail */
+.managed-detail-body {
+  padding: 14px;
+  overflow-y: auto;
+}
+.managed-task-heading {
+  margin: 0 0 6px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #f1f4ef;
+  line-height: 1.25;
+}
+.managed-task-objective {
+  margin: 0 0 12px 0;
+  font-size: 11.5px;
+  color: #95a08f;
+  line-height: 1.5;
+}
+.managed-task-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  margin: 0 0 16px 0;
+}
+.managed-task-meta > div { display: flex; flex-direction: column; gap: 2px; }
+.managed-task-meta dt {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #6e7a6b;
+  text-transform: uppercase;
+  margin: 0;
+}
+.managed-task-meta dd {
+  margin: 0;
+  font-size: 11.5px;
+  color: #dce1dc;
+  word-break: break-all;
+}
+
+.managed-section { margin-top: 14px; }
+.managed-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  color: #9ba597;
+  text-transform: uppercase;
+}
+.managed-run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.managed-run-list li {
+  display: grid;
+  grid-template-columns: 14px 78px 80px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #cbd3c5;
+  padding: 3px 0;
+}
+.managed-run-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #d4dacf;
+}
+.managed-run-status {
+  font-size: 9.5px;
+  letter-spacing: 0.4px;
+  color: #9ba597;
+  text-transform: uppercase;
+}
+.managed-run-invocations {
+  font-size: 10.5px;
+  color: #7c867f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* stream */
+.managed-stream-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.managed-stream-entry {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 8px;
+  padding: 6px 6px;
+  border-radius: 6px;
+  background: #1d221f;
+}
+.managed-stream-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+  background: #6e7a6b;
+}
+.managed-stream-dot-blue { background: #9bd1ff; }
+.managed-stream-dot-green { background: #c5edaa; }
+.managed-stream-dot-orange { background: #e8c87b; }
+.managed-stream-dot-red { background: #e89090; }
+.managed-stream-dot-yellow { background: #e8c87b; }
+.managed-stream-dot-slate { background: #95a08f; }
+.managed-stream-meta {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 10px;
+  color: #95a08f;
+}
+.managed-stream-seq {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #6e7a6b;
+}
+.managed-stream-type {
+  color: #dce1dc;
+  font-size: 10.5px;
+}
+.managed-stream-at {
+  margin-left: auto;
+  color: #6e7a6b;
+  font-size: 10px;
+}
+.managed-stream-payload {
+  grid-column: 2;
+  margin: 4px 0 0 0;
+  background: #111512;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #cbd3c5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+}

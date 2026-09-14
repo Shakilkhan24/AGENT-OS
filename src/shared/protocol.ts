@@ -9,6 +9,7 @@ import { hookSchema } from "./hooks";
 import { terminalStatusSchema } from "./events";
 import { settingsSchema } from "./settings";
 import { utf8Bytes } from "./terminal-flow";
+import { managedProjectionSchema, managedProjectionUnavailableSchema } from "./managed-view";
 
 export const API_VERSION = 1;
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024;
@@ -22,6 +23,10 @@ export const snapshotSchema = z.object({
   sequence: z.number().int().nonnegative(), sessions: z.array(sessionSchema.extend({ terminals: z.array(terminalView) })),
   presets: z.array(presetSchema), engineError: z.string().optional(), engineFailure: failureSchema.optional(),
   envProfiles: z.array(envProfileSchema).optional(), hooks: z.array(hookSchema).optional(), launches: z.array(launchRecordSchema).optional(),
+  // M3c.1: opt-in projection of M3a/M3b entities. Absent when the runtime
+  // is degraded or the DB driver opted out; existing renderer code treats
+  // an absent block the same as the legacy M2 surface.
+  managed: z.union([managedProjectionSchema, managedProjectionUnavailableSchema]).optional(),
 });
 const launchResult = snapshotSchema.extend({ launchId: id.optional(), terminalIds: z.array(id),
   launchErrors: z.array(z.object({ terminalId: id, error: z.string() })) });

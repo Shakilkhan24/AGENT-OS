@@ -78,6 +78,13 @@ export async function findArtifactByUri(worker: DbWorker, uri: string, sha256: s
   return parseArtifactRow(row);
 }
 
+/** Flat lister over every artifact row. Used by M3c.1's review shell. */
+export async function listArtifacts(worker: DbWorker): Promise<ArtifactReference[]> {
+  const driver = driverOf(worker);
+  const rows = driver.prepare("SELECT * FROM artifact_reference ORDER BY imported_at ASC").all();
+  return rows.map(parseArtifactRow);
+}
+
 export function isArtifactExpired(reference: ArtifactReference, now: Date = new Date()): boolean {
   if (reference.expiresAt === null) return false;
   return new Date(reference.expiresAt).getTime() <= now.getTime();

@@ -13,6 +13,8 @@ import { TmuxEngine } from "../main/engine";
 import { ProtocolDispatcher } from "../main/protocol-dispatcher";
 import type { RuntimeEndpoint } from "./control-server";
 import { TerminalInputQueue, type InputQueueProgress } from "./input-queue";
+import { openManagedDatabase, type OwnedDb } from "./db-owner";
+import { buildManagedProjection } from "./managed-projection";
 
 /** Domain ownership without Electron. One selected attachment is retained until M5. */
 export class RuntimeWorkspace {
@@ -25,8 +27,11 @@ export class RuntimeWorkspace {
   private changeTimer?: ReturnType<typeof setTimeout>;
   private unsubscribe: () => void;
   private readonly inputQueue: TerminalInputQueue;
+  /** M3c.1 — owned DB worker for M3a/M3b entities. Closed in `close()`. */
+  private readonly ownedDb: OwnedDb;
   constructor(readonly service: SessionService, private drafts: DraftStore, readonly settings: Settings,
-    private recovery: string | null, private appVersion: string) {
+    private recovery: string | null, private appVersion: string, ownedDb: OwnedDb) {
+    this.ownedDb = ownedDb;
     this.inputQueue = new TerminalInputQueue(async (token, data) => {
       if (this.closing) throw new AppError("UNAVAILABLE", "Runtime is stopping");
       if (this.attachment?.view.token !== token)
@@ -45,17 +50,21 @@ export class RuntimeWorkspace {
       }, 25);
     });
   }
+  /** The M3a/M3b worker for callers that need read or write access (e.g. tests). */
+  get dbWorker() { return this.ownedDb.worker; }
   static async open(directory: string, helpers: string, appVersion: string) {
     const settings = await new SettingsStore(directory).load();
     const store = new Store(directory);
     const files = new SessionFilesystem(path.join(helpers, "filesystem.py"), settings);
     const engine = new TmuxEngine(directory, path.join(helpers, "pty_bridge.py"), settings);
     const service = new SessionService(store, engine, files, settings);
+    const ownedDb = await openManagedDatabase(directory, path.join(directory, "runtime"));
     try {
       await service.initialize();
-      const workspace = new RuntimeWorkspace(service, new DraftStore(directory, settings.draftLimit), settings, store.recoveredFromInvalid ?? null, appVersion);
+      const workspace = new RuntimeWorkspace(service, new DraftStore(directory, settings.draftLimit), settings, store.recoveredFromInvalid ?? null, appVersion, ownedDb);
       service.start(); return workspace;
     } catch (error) {
+      await ownedDb.close().catch(() => {});
       await service.close().catch(() => {}); await files.close(); throw error;
     }
   }
@@ -76,7 +85,10 @@ export class RuntimeWorkspace {
       return this.attachment.view;
     };
     dispatcher.register("hello", () => ({ apiVersion: API_VERSION, appVersion: this.appVersion, incarnation: this.incarnation }));
-    dispatcher.register("snapshot", () => service.snapshot());
+    dispatcher.register("snapshot", async () => ({
+      ...(await service.snapshot()),
+      managed: await buildManagedProjection(this.ownedDb.worker),
+    }));
     dispatcher.register("get-settings", () => this.settings);
     dispatcher.register("startup-recovery", () => this.recovery);
     dispatcher.register("list-drafts", () => this.drafts.list());
@@ -171,6 +183,10 @@ export class RuntimeWorkspace {
     const results = await Promise.allSettled([this.service.launches.close(), ...clients.map(peer => peer.endpoint.close())]);
     const service = await Promise.allSettled([this.service.close()]);
     await this.service.filesystem.close();
+    // The M3a/M3b worker is owned by the workspace; release it last so
+    // any in-flight reader from the projection still resolves. `close()`
+    // is idempotent, so this is safe even if `open()` failed.
+    await this.ownedDb.close().catch(() => {});
     const failure = [...results, ...service].find(result => result.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
   }
