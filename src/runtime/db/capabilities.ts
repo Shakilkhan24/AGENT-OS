@@ -19,6 +19,7 @@
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { extendNativeCapabilities } from "../providers/capability-matrix";
 
 /** Discriminated capability set returned by the probe. */
 export const capabilityMatrixSchema = z.object({
@@ -29,11 +30,19 @@ export const capabilityMatrixSchema = z.object({
     python3: z.boolean(),
     node: z.boolean(),
   }).strict(),
-  /** Native provider capabilities — populated by integration tests in M3b. */
-  native: z.object({
-    claude: z.boolean(),
-    codex: z.boolean(),
-  }).strict(),
+  /** Native provider capabilities — version-aware as of M3b. */
+  native: z.union([
+    // Legacy shape (M3a): keep accepting `{claude, codex}` for back-compat
+    // with existing test overrides.
+    z.object({ claude: z.boolean(), codex: z.boolean() }).strict(),
+    // Current shape: version-aware.
+    z.object({
+      claude: z.boolean(),
+      codex: z.boolean(),
+      version: z.string().nullable(),
+      featureCount: z.number().int().min(0),
+    }).strict(),
+  ]),
   /** Restrictions the current host can enforce (process-wide). */
   supportedRestrictions: z.array(z.string().min(1).max(64)),
   /** Restrictions the host cannot enforce. */
@@ -46,18 +55,25 @@ export const capabilityMatrixSchema = z.object({
 export type CapabilityMatrix = z.infer<typeof capabilityMatrixSchema>;
 
 /** Same shape, default for the common case. */
-const DEFAULT_MATRIX = (hostTag: "trusted" | "untrusted" | "unknown"): CapabilityMatrix => ({
-  installed: probeInstalled(),
-  native: { claude: false, codex: false },
-  supportedRestrictions: hostTag === "trusted"
-    ? ["no-network", "no-shell-exec", "read-only-filesystem"]
-    : ["read-only-filesystem"],
-  unsupportedRestrictions: hostTag === "trusted"
-    ? ["no-network", "no-shell-exec", "read-only-filesystem"]
-    : ["no-network", "no-shell-exec"],
-  probedAt: new Date().toISOString(),
-  hostTag,
-});
+const DEFAULT_MATRIX = (hostTag: "trusted" | "untrusted" | "unknown"): CapabilityMatrix => {
+  const installed = probeInstalled();
+  return {
+    installed,
+    native: extendNativeCapabilities({
+      installed, native: { claude: false, codex: false },
+      supportedRestrictions: [], unsupportedRestrictions: [],
+      probedAt: new Date(0).toISOString(), hostTag,
+    }),
+    supportedRestrictions: hostTag === "trusted"
+      ? ["no-network", "no-shell-exec", "read-only-filesystem"]
+      : ["read-only-filesystem"],
+    unsupportedRestrictions: hostTag === "trusted"
+      ? ["no-network", "no-shell-exec", "read-only-filesystem"]
+      : ["no-network", "no-shell-exec"],
+    probedAt: new Date().toISOString(),
+    hostTag,
+  };
+};
 
 function probeInstalled(): CapabilityMatrix["installed"] {
   // Look for binaries on PATH; this is a quick existence check, not a version
