@@ -40,16 +40,25 @@ async function spawnRuntime(parentDir: string, helpersDir: string) {
   const child = spawn(process.execPath, [
     path.resolve("dist/runtime/index.cjs"), paths.socket, dataDir, runtimeDir, helpersDir,
   ], { env: { ...process.env, MINIMAL_DATA_DIR: dataDir }, stdio: ["ignore", "pipe", "pipe"] });
-  const stderr: Buffer[] = [];
-  child.stderr.on("data", chunk => stderr.push(chunk));
+  const stderrChunks: Buffer[] = [];
+  child.stderr.on("data", chunk => stderrChunks.push(chunk));
+  const stdoutChunks: Buffer[] = [];
+  child.stdout.on("data", chunk => stdoutChunks.push(chunk));
+  child.once("exit", () => {});
   const readyPath = path.join(runtimeDir, "ready.json");
   const start = Date.now();
   let ready: { token: string; incarnation: string; socket: string; appVersion: string; pid: number } | undefined;
   while (Date.now() - start < READY_BUDGET_MS) {
+    if (child.exitCode !== null || child.signalCode !== null) break;
     try { ready = JSON.parse(await readFile(readyPath, "utf8")); break; }
     catch { await new Promise(resolve => setTimeout(resolve, 100)); }
   }
-  return { child, ready, stderr: Buffer.concat(stderr).toString("utf8"), paths, readyPath };
+  return {
+    child, ready,
+    stderr: Buffer.concat(stderrChunks).toString("utf8"),
+    stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+    paths, readyPath,
+  };
 }
 
 test("runtime entrypoint serves ready.json and a valid ControlClient handshake", async t => {
@@ -64,7 +73,7 @@ test("runtime entrypoint serves ready.json and a valid ControlClient handshake",
   });
   if (!handle.ready) {
     handle.child.kill("SIGKILL");
-    throw new Error(`runtime entry did not write ready.json in ${READY_BUDGET_MS} ms\nstderr: ${handle.stderr}`);
+    throw new Error(`runtime entry did not write ready.json in ${READY_BUDGET_MS} ms\nstderr: ${handle.stderr}\nstdout: ${handle.stdout}`);
   }
   assert.match(handle.ready.token, /^[a-f0-9]{64}$/);
   assert.equal(handle.ready.socket, handle.paths.socket);

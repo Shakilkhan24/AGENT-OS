@@ -5,7 +5,8 @@
  * `ready.json`, and exposes a `stop()` that signals the child and escalates
  * to SIGKILL on budget exhaustion.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -77,7 +78,7 @@ export async function launchRuntime(options: RuntimeLaunchOptions): Promise<Runt
   await rm(path.join(runtimeDir, "ready.json"), { force: true });
   const helper = path.join(helpersDir, "runtime_lock.py");
   const args = [helper, lockPath, executable, runtimeEntry, socketPath, dataDir, runtimeDir, helpersDir];
-  const child: ChildProcessWithoutNullStreams = spawn("python3", args, {
+  const child: ChildProcessByStdio<null, Readable, Readable> = spawn("python3", args, {
     env: { ...process.env, MINIMAL_DATA_DIR: dataDir, ELECTRON_RUN_AS_NODE: "1", ...(options.env ?? {}) },
     stdio: ["ignore", "pipe", "pipe"],
   });

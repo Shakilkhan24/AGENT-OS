@@ -99,16 +99,21 @@ test("launchRuntime refuses a stale ready.json from a previous crash", async t =
   const readyPath = path.join(paths.runtime, "ready.json");
   await writeFile(readyPath, JSON.stringify({ token: "stale", incarnation: "stale", socket: paths.socket, appVersion: "x", pid: 0 }));
   await assert.doesNotReject(stat(readyPath));
-  const handle = await launchRuntime({
-    dataDir,
-    helpersDir: path.resolve("dist/helpers"),
-    executable: process.execPath,
-    runtimeEntry: path.resolve("dist/runtime/index.cjs"),
-    runtimeDir: paths.runtime,
-    socketPath: paths.socket,
-    lockPath: paths.lock,
-    readyBudgetMs: 500,
-  }).catch(async () => null);
+  let handle: Awaited<ReturnType<typeof launchRuntime>> | undefined | null;
+  try {
+    handle = await launchRuntime({
+      dataDir,
+      helpersDir: path.resolve("dist/helpers"),
+      executable: process.execPath,
+      runtimeEntry: path.resolve("dist/runtime/index.cjs"),
+      runtimeDir: paths.runtime,
+      socketPath: paths.socket,
+      lockPath: paths.lock,
+      readyBudgetMs: 500,
+    });
+  } catch {
+    handle = null;
+  }
   t.after(async () => { if (handle) try { await handle.stop("SIGKILL", 1000); } catch {} await rm(paths.parent, { recursive: true, force: true }); });
   // The stale file must have been unlinked before the runtime tries to write a new one.
   // If the runtime did write a fresh one, it must no longer be the stale payload.
