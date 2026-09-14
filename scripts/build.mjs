@@ -12,6 +12,15 @@ await build({
   sourcemap: true,
 });
 await build({
+  entryPoints: ["src/runtime/entry.ts"],
+  outfile: "dist/runtime/index.cjs",
+  bundle: true,
+  platform: "node",
+  format: "cjs",
+  external: ["electron"],
+  sourcemap: true,
+});
+await build({
   entryPoints: ["src/preload/index.ts"],
   outfile: "dist/preload/index.cjs",
   bundle: true,
