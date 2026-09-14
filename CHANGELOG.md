@@ -9,9 +9,10 @@ M1 runtime foundation, in progress.
 - Introduce the shared versioned control manifest, preload handshake, typed replies, validated terminal signals and visible protocol failures.
 - Bound pending requests by count and UTF-8 bytes; carry deadlines/cancellation into file operations and launch batches without undoing started terminals or replaying uncertain mutations.
 - Refresh workspace state from committed event hints so terminal exit status appears promptly, retaining polling as a fallback.
-- Add an authenticated local socket transport with bounded framing, per-connection cancellation, slow-peer protection and explicit disconnect uncertainty; runtime deployment remains pending.
+- Add an authenticated local socket transport with bounded framing, per-connection cancellation, slow-peer protection and explicit disconnect uncertainty.
 - Consolidate domain operations in an Electron-independent workspace used by the desktop facade and headless socket tests. Bind attachment control to its connection and preserve accepted batches across observer disconnects.
 - Split sidebar/search and workspace dialogs out of `App.tsx`; preserve keyboard/selection behavior and show the actual application version in the UI.
+- Ship the runtime as a separate, OS-locked Node-mode Electron process. The desktop holds the per-profile lock inode, spawns the runtime via `helpers/runtime_lock.py`, reads its `ready.json` token and connects over the authenticated socket. Duplicate owners exit 73; the runtime rejects a shared-mode socket directory; the deployment test covers lock contention, the SIGKILL/socket-privacy invariants and the handshake failure path.
 
 ## [1.2.2] - 2026-09-13
 
