@@ -167,7 +167,8 @@ export const tableSpecs: readonly TableSpec[] = [
       base_hash TEXT NOT NULL,
       content TEXT NOT NULL,
       revision INTEGER NOT NULL DEFAULT 1,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      root_identity TEXT NOT NULL DEFAULT ''
     )`,
     indices: [
       "CREATE INDEX draft_session_idx ON draft(session_uuid)",

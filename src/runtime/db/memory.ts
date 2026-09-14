@@ -243,12 +243,18 @@ export class MemoryDatabase implements Database {
   }
 
   private executeUpdate(sql: string, bindings: Bindings, write: boolean): Row[] | number {
-    const match = sql.match(/^\s*update\s+([a-z_][a-z0-9_]*)\s+set\s+(.+?)(?:\s+where\s+(.+?))?\s*$/i);
+    const match = sql.match(/^\s*update\s+([a-z_][a-z0-9_]*)\s+set\s+([\s\S]+?)(?:\s+where\s+([\s\S]+?))?\s*$/i);
     if (!match) throw new Error(`Unsupported update: ${sql}`);
     const table = this.tables.get(match[1]);
     if (!table) throw new Error(`Unknown table: ${match[1]}`);
-    const assignments = this.parseAssignments(match[2]);
-    const predicate = match[3] ? this.parsePredicate(match[3], bindings) : () => true;
+    // Placeholders are numbered in the order the SQL encounters them: every
+    // `?` in the SET clause comes first, then every `?` in the WHERE clause.
+    // Sharing a counter between `parseAssignments` and `parsePredicate` is
+    // essential — otherwise the WHERE always resolves to the SET binding at
+    // the same offset and the predicate silently no-ops.
+    let placeholderIndex = 0;
+    const assignments = this.parseAssignments(match[2], () => placeholderIndex++);
+    const predicate = match[3] ? this.parsePredicate(match[3], bindings, () => placeholderIndex++) : () => true;
     let updated = 0;
     for (const row of table.rows) {
       if (!predicate(row)) continue;
@@ -295,17 +301,31 @@ export class MemoryDatabase implements Database {
       });
     }
     if (limit !== undefined) rows = rows.slice(0, limit);
-    return projection === "*" ? rows.map(row => ({ ...row })) : rows.map(row => ({ [projection]: row[projection] as Value }));
+    if (projection === "*") return rows.map(row => ({ ...row }));
+    // Support multi-column projections ("SELECT a, b, c FROM t") by splitting
+    // the comma-separated list and returning each row with only the named
+    // columns. The legacy single-column path remains a fast specialisation.
+    const columns = projection.split(",").map(name => name.trim()).filter(Boolean);
+    if (columns.length <= 1) return rows.map(row => ({ [projection]: row[projection] as Value }));
+    return rows.map(row => Object.fromEntries(columns.map(column => [column, row[column] as Value])));
   }
 
-  private parseAssignments(spec: string): Array<{ column: string; value: Value | { param: number } }> {
+  private parseAssignments(spec: string, nextIndex: () => number): Array<{ column: string; value: Value | { param: number } }> {
+    // Walk the SET clause left-to-right so each `?` advances the shared
+    // placeholder counter. Naively calling `parseLiteralOrPlaceholder("?")`
+    // resolves every assignment to `bindings[0]`, which silently no-ops
+    // UPDATE-with-multiple-placeholders.
     return spec.split(",").map(part => {
       const [column, raw] = part.split("=").map(part => part.trim());
-      return { column, value: this.parseLiteralOrPlaceholder(raw) };
+      const value = this.parseLiteralOrPlaceholder(raw);
+      if (value && typeof value === "object" && "param" in value) {
+        (value as { param: number }).param = nextIndex();
+      }
+      return { column, value };
     });
   }
 
-  private parsePredicate(spec: string, bindings: Bindings): (row: Row) => boolean {
+  private parsePredicate(spec: string, bindings: Bindings, nextIndex: () => number = () => 0): (row: Row) => boolean {
     const conjuncts = spec.split(/\s+and\s+/i);
     const clauses = conjuncts.map(part => {
       const match = part.match(/^\s*([a-z_][a-z0-9_]*)\s*(=|is|!=)\s*(\?+|\d+|null|true|false|'[^']*')\s*$/i);
@@ -314,6 +334,9 @@ export class MemoryDatabase implements Database {
       const operator = match[2].toLowerCase();
       const raw = match[3];
       const value = this.parseLiteralOrPlaceholder(raw);
+      if (value && typeof value === "object" && "param" in value) {
+        (value as { param: number }).param = nextIndex();
+      }
       const resolved = (_row: Row) => this.resolveValue(value, bindings);
       if (operator === "=" || operator === "is") return (row: Row) => resolved(row) === row[column];
       return (row: Row) => resolved(row) !== row[column];
