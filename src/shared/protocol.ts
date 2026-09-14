@@ -15,7 +15,14 @@ import { executeVerificationInputSchema, executeVerificationResultSchema,
   transitionAttentionInputSchema, transitionAttentionResultSchema,
   snoozeAttentionInputSchema, snoozeAttentionResultSchema,
   previewArtifactInputSchema, previewArtifactResultSchema,
-  renderCandidateDiffInputSchema, renderCandidateDiffResultSchema } from "./managed-schema";
+  renderCandidateDiffInputSchema, renderCandidateDiffResultSchema,
+  readTaskPromptDraftInputSchema, readTaskPromptDraftResultSchema,
+  saveTaskPromptDraftInputSchema, saveTaskPromptDraftResultSchema,
+  removeTaskPromptDraftInputSchema, removeTaskPromptDraftResultSchema,
+  answerAttentionInputSchema, answerAttentionResultSchema,
+  continueInvocationInputSchema, continueInvocationResultSchema,
+  newAttemptInputSchema, newAttemptResultSchema,
+  requestStopInputSchema, requestStopResultSchema } from "./managed-schema";
 
 export const API_VERSION = 1;
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024;
@@ -87,6 +94,17 @@ export const methods = {
   // diff on demand; the runtime shells out to `git diff` inside the
   // run's worktree and applies the 256 KiB cap. `since: 1.4.0`.
   "render-candidate-diff": method(renderCandidateDiffInputSchema, renderCandidateDiffResultSchema, MAX_DEADLINE_MS),
+  // M3c.5 — task-prompt drafts + four managed-work actions. The
+  // dispatcher handlers live in `src/runtime/workspace.ts`; the
+  // desktop auto-forward loop in `src/main/index.ts:124-137` picks
+  // up these keys automatically.
+  "read-task-prompt-draft": method(readTaskPromptDraftInputSchema, readTaskPromptDraftResultSchema),
+  "save-task-prompt-draft": method(saveTaskPromptDraftInputSchema, saveTaskPromptDraftResultSchema),
+  "remove-task-prompt-draft": method(removeTaskPromptDraftInputSchema, removeTaskPromptDraftResultSchema),
+  "answer-attention": method(answerAttentionInputSchema, answerAttentionResultSchema),
+  "continue-invocation": method(continueInvocationInputSchema, continueInvocationResultSchema, MAX_DEADLINE_MS),
+  "new-attempt": method(newAttemptInputSchema, newAttemptResultSchema, MAX_DEADLINE_MS),
+  "request-stop": method(requestStopInputSchema, requestStopResultSchema),
 } as const;
 export type Method = keyof typeof methods;
 export type RequestArgs<M extends Method> = z.output<(typeof methods)[M]["request"]>;

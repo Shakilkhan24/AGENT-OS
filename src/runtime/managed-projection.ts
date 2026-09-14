@@ -64,6 +64,7 @@ function projectTaskView(task: Task) {
     id: task.id, title: task.title, objective: task.objective,
     status: task.status, projectId: task.projectId,
     providerVersion: task.providerVersion, model: task.model,
+    accountMode: task.accountMode,
     hostId: task.hostId,
     createdAt: task.createdAt, updatedAt: task.updatedAt,
   });

@@ -313,3 +313,188 @@ test("IPC render-candidate-diff rejects a malformed runId at the protocol layer"
     await dispatcher.close();
   } finally { await worker.close(); }
 });
+
+// ───────── M3c.5 — task-prompt drafts + four managed-work actions ─────────
+
+test("IPC read-task-prompt-draft returns null for unknown task and the saved row afterwards", async () => {
+  const worker = freshWorker();
+  try {
+    const { id: taskId } = await createTask(worker, { title: "draft", hostId: "h", projectId: "p" });
+    const dispatcher = new ProtocolDispatcher();
+    dispatcher.register("read-task-prompt-draft", async ([id]) => {
+      try {
+        return await (await import("../../src/runtime/db/task-prompts")).readTaskPromptDraft(worker, id) ?? null;
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    dispatcher.register("save-task-prompt-draft", async ([id, input]) => {
+      try {
+        return await (await import("../../src/runtime/db/task-prompts")).saveTaskPromptDraft(worker, id, input);
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    const ZERO_HASH = "0".repeat(64);
+
+    const before = await dispatcher.dispatch("read-task-prompt-draft",
+      requestFor("read-task-prompt-draft", [taskId]));
+    assert.equal(before.ok, true);
+    if (before.ok) assert.equal(before.result, null);
+
+    const saved = await dispatcher.dispatch("save-task-prompt-draft",
+      requestFor("save-task-prompt-draft", [taskId, { content: "draft me", baseHash: ZERO_HASH, expectedRevision: null }]));
+    assert.equal(saved.ok, true);
+    if (saved.ok) {
+      const obj = saved.result as { revision: number; content: string };
+      assert.equal(obj.revision, 1);
+      assert.equal(obj.content, "draft me");
+    }
+
+    const after = await dispatcher.dispatch("read-task-prompt-draft",
+      requestFor("read-task-prompt-draft", [taskId]));
+    assert.equal(after.ok, true);
+    if (after.ok) {
+      const obj = after.result as { revision: number; content: string };
+      assert.equal(obj.revision, 1);
+      assert.equal(obj.content, "draft me");
+    }
+    await dispatcher.close();
+  } finally { await worker.close(); }
+});
+
+test("IPC answer-attention resolves a decision row and writes the bumped-revision reply row", async () => {
+  const worker = freshWorker();
+  try {
+    const { id: taskId } = await createTask(worker, { title: "answer", hostId: "h", projectId: "p" });
+    const { raiseAttention } = await import("../../src/runtime/db/attention-items");
+    const raised = await raiseAttention(worker, {
+      taskId, kind: "decision", issueIdentity: "wait", revision: 0, payload: {},
+    });
+
+    const dispatcher = new ProtocolDispatcher();
+    const { answerAttention } = await import("../../src/runtime/orchestration/managed-actions");
+    dispatcher.register("answer-attention", async ([id, input]) => {
+      try {
+        const result = await answerAttention(worker, id, input);
+        const viewOf = (item: typeof result.resolvedItem) => ({
+          id: item.id, taskId: item.taskId, kind: item.kind,
+          issueIdentity: item.issueIdentity, revision: item.revision,
+          state: item.state, payloadJson: item.payloadJson,
+          snoozedUntil: item.snoozedUntil,
+          createdAt: item.createdAt, updatedAt: item.updatedAt,
+        });
+        if (!result.followUpItem) throw new AppError("UNAVAILABLE", "missing followUp");
+        return { resolved: viewOf(result.resolvedItem), followUp: viewOf(result.followUpItem) };
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+
+    const response = await dispatcher.dispatch("answer-attention",
+      requestFor("answer-attention", [raised.id, { reply: "ok", answeredBy: "user" }]));
+    assert.equal(response.ok, true);
+    if (response.ok) {
+      const obj = response.result as { resolved: { state: string }; followUp: { revision: number; kind: string } };
+      assert.equal(obj.resolved.state, "resolved");
+      assert.equal(obj.followUp.revision, 1);
+      assert.equal(obj.followUp.kind, "decision");
+    }
+    await dispatcher.close();
+  } finally { await worker.close(); }
+});
+
+test("IPC request-stop flips the run to cancelled and returns the structured status", async () => {
+  const worker = freshWorker();
+  try {
+    const { id: taskId } = await createTask(worker, { title: "stop", hostId: "h", projectId: "p" });
+    const { createRun } = await import("../../src/runtime/db/runs");
+    const { id: runId } = await createRun(worker, { taskId });
+
+    const dispatcher = new ProtocolDispatcher();
+    const { requestRunStop } = await import("../../src/runtime/orchestration/managed-actions");
+    const { resetStops } = await import("../../src/runtime/orchestration/stop-policy");
+    dispatcher.register("request-stop", async ([id, input]) => {
+      try {
+        const result = await requestRunStop(worker, id, input);
+        return { runId: result.runId, status: result.status, blockedExecuteOnce: result.blockedExecuteOnce };
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+
+    const response = await dispatcher.dispatch("request-stop",
+      requestFor("request-stop", [runId, { reason: "user-aborted", requestedBy: "user" }]));
+    assert.equal(response.ok, true);
+    if (response.ok) {
+      const obj = response.result as { runId: string; status: string; blockedExecuteOnce: boolean };
+      assert.equal(obj.runId, runId);
+      assert.equal(obj.status, "cancelled");
+      assert.equal(obj.blockedExecuteOnce, true);
+    }
+    await dispatcher.close();
+    resetStops();
+  } finally { await worker.close(); }
+});
+
+test("IPC new-attempt returns ok with a fresh invocationId, dispatchIntentId, and attentionId", async () => {
+  const worker = freshWorker();
+  try {
+    const { id: taskId } = await createTask(worker, { title: "new-attempt", hostId: "h", projectId: "p" });
+    const { createRun } = await import("../../src/runtime/db/runs");
+    const { id: runId } = await createRun(worker, { taskId });
+    const { raiseAttention } = await import("../../src/runtime/db/attention-items");
+    const attention = await raiseAttention(worker, {
+      taskId, kind: "decision", issueIdentity: "needs-input", revision: 0, payload: {},
+    });
+
+    const dispatcher = new ProtocolDispatcher();
+    const { newAttempt } = await import("../../src/runtime/orchestration/managed-actions");
+    const { resetStops } = await import("../../src/runtime/orchestration/stop-policy");
+    const { setExecuteOnceAdapter, resetExecuteOnceAdapter } = await import("../../src/runtime/orchestration/execute-once");
+    const { ScriptedProviderDouble } = await import("../../src/runtime/providers/scripted-double");
+    setExecuteOnceAdapter(() => new ScriptedProviderDouble());
+    dispatcher.register("new-attempt", async ([input]) => {
+      try {
+        return await newAttempt(worker, input);
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    // The "new-attempt" path doesn't take an attentionId — but the
+    // result envelope still carries an attentionId slot; ensure the
+    // IPC returns the empty-string default the runtime emits when
+    // none is supplied.
+    const response = await dispatcher.dispatch("new-attempt",
+      requestFor("new-attempt", [{
+        runId,
+        idempotencyKey: "na-m3c5",
+        canonicalDigest: "f".repeat(64),
+        providerVersion: "v1", model: "m1",
+        accountMode: "authenticated",
+        method: "agent-run",
+        args: {},
+        scope: {},
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+        requestedBy: "user",
+      }]));
+    if (!response.ok) throw new Error(`new-attempt failed: ${JSON.stringify(response.error)}`);
+    assert.equal(response.ok, true);
+    if (response.ok) {
+      const obj = response.result as { kind: string; invocationId?: string; dispatchIntentId?: string; attentionId?: string };
+      assert.equal(obj.kind, "ok");
+      assert.match(obj.invocationId ?? "", /^[0-9a-f]{8}-/);
+      assert.match(obj.dispatchIntentId ?? "", /^[0-9a-f]{8}-/);
+      assert.equal(obj.attentionId, "");
+    }
+    await dispatcher.close();
+    resetExecuteOnceAdapter();
+    resetStops();
+    void attention;
+  } finally { await worker.close(); }
+});

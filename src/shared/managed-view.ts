@@ -30,6 +30,7 @@ export const taskViewSchema = taskSchema.pick({
   projectId: true,
   providerVersion: true,
   model: true,
+  accountMode: true,
   hostId: true,
   createdAt: true,
   updatedAt: true,

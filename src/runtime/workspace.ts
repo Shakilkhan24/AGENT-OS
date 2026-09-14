@@ -21,6 +21,13 @@ import { acceptReview, rejectReview } from "./db/reviews";
 import { transitionAttention, snoozeAttention } from "./db/attention-items";
 import { previewArtifact } from "./db/artifact-references";
 import { renderCandidateDiff } from "./db/candidate-diff";
+import { readTaskPromptDraft, saveTaskPromptDraft, removeTaskPromptDraft } from "./db/task-prompts";
+import {
+  answerAttention,
+  continueInvocation,
+  newAttempt,
+  requestRunStop,
+} from "./orchestration/managed-actions";
 
 /** Domain ownership without Electron. One selected attachment is retained until M5. */
 export class RuntimeWorkspace {
@@ -246,6 +253,84 @@ export class RuntimeWorkspace {
           runId: diff.runId, base: diff.base, tree: diff.tree,
           bytes: diff.bytes, truncated: diff.truncated, body: diff.body,
         };
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    // M3c.5 — task-prompt drafts (meta-backed) + four managed-work
+    // actions. The drafts follow the same conflict-wrapping pattern
+    // as the M3c.3 attention handlers. The four actions return a
+    // structured `{kind: "ok"} | {kind: "conflict"}` envelope so the
+    // renderer's button surfaces a human reason without parsing
+    // `AppError` shape.
+    dispatcher.register("read-task-prompt-draft", async ([taskId]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        return await readTaskPromptDraft(worker, taskId) ?? null;
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    dispatcher.register("save-task-prompt-draft", async ([taskId, input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        return await saveTaskPromptDraft(worker, taskId, input);
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    dispatcher.register("remove-task-prompt-draft", async ([taskId]) => {
+      const worker = this.ownedDb.worker;
+      await removeTaskPromptDraft(worker, taskId);
+    });
+    dispatcher.register("answer-attention", async ([id, input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const result = await answerAttention(worker, id, input);
+        const viewOf = (item: typeof result.resolvedItem) => ({
+          id: item.id, taskId: item.taskId, kind: item.kind,
+          issueIdentity: item.issueIdentity, revision: item.revision,
+          state: item.state, payloadJson: item.payloadJson,
+          snoozedUntil: item.snoozedUntil,
+          createdAt: item.createdAt, updatedAt: item.updatedAt,
+        });
+        if (!result.followUpItem)
+          throw new AppError("UNAVAILABLE", "answer-attention: follow-up row missing");
+        return {
+          resolved: viewOf(result.resolvedItem),
+          followUp: viewOf(result.followUpItem),
+        };
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    dispatcher.register("continue-invocation", async ([attentionId, input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        return await continueInvocation(worker, attentionId, input);
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    dispatcher.register("new-attempt", async ([input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        return await newAttempt(worker, input);
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    dispatcher.register("request-stop", async ([runId, input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const result = await requestRunStop(worker, runId, input);
+        return { runId: result.runId, status: result.status, blockedExecuteOnce: result.blockedExecuteOnce };
       } catch (error) {
         if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
         throw error;

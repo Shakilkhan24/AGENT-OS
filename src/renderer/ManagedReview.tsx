@@ -19,7 +19,20 @@
  *     identity triple they bind to); open reviews expose Accept/Reject
  *     buttons that call the `recordReviewDecision` IPC seam.
  *
- * Both buttons are wired through the typed `window.minimal` IPC seam;
+ * M3c.5 adds three more sections to `TaskDetail`:
+ *   • **Prompt editor** — a `<textarea>` whose contents are
+ *     optimistic-update-saved to the `meta` table under
+ *     `task-prompt-draft:<taskUuid>`. The revision counter and
+ *     "Saved r{N}" footer mirror `saveDraft`.
+ *   • **Actions** — four buttons (`Answer`, `Continue`, `New attempt`,
+ *     `Stop`) gated by the underlying state-machine legality. Each
+ *     one has a single-letter keyboard shortcut (a / c / n / s) that
+ *     fires when the detail pane has focus and no textbox is active.
+ *   • Three-pane focus model (`list | detail | prompt`) — `Tab` /
+ *     `Shift+Tab` cycles, `Enter` promotes the list → detail, `Escape`
+ *     pops `prompt → detail`.
+ *
+ * All buttons are wired through the typed `window.minimal` IPC seam;
  * no new globals are introduced. The component still never issues IPC
  * for read-only data — that's all derived from the `managed` block on
  * the `Snapshot`.
@@ -39,17 +52,23 @@ import {
   CircleDot,
   Cog,
   ClipboardList,
+  CornerDownLeft,
   Eye,
   FileText,
   Folder,
+  MessageSquare,
   Play,
+  RotateCcw,
+  Save,
   ScrollText,
+  StopCircle,
   ThumbsDown,
   ThumbsUp,
   X,
 } from "lucide-react";
 import type {
   ArtifactReferenceView,
+  AttentionItemView,
   ManagedProjection,
   ManagedProjectionOrUnavailable,
   ReviewView,
@@ -105,7 +124,12 @@ function ManagedReviewAvailable({ projection }: { projection: ManagedProjection 
     return undefined;
   }, [projection.projectGroups]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>(firstTask?.id);
-  const [focusedPane, setFocusedPane] = useState<"list" | "detail">("list");
+  // M3c.5 — three-pane focus model: list / detail / prompt (the
+  // prompt editor's `<textarea>` is the third tabstop).
+  const [focusedPane, setFocusedPane] = useState<"list" | "detail" | "prompt">("list");
+  // Imperative refs so the document-level keyboard handler can
+  // dispatch to the prompt editor without prop-drilling handlers.
+  const promptTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     // Reset selection when the projection changes shape (e.g. a task
@@ -144,6 +168,9 @@ function ManagedReviewAvailable({ projection }: { projection: ManagedProjection 
         previewArtifactId={previewArtifactId}
         onPreviewArtifact={setPreviewArtifactId}
         onChanged={() => void window.minimal.snapshot().catch(() => {})}
+        promptFocused={focusedPane === "prompt"}
+        promptTextareaRef={promptTextareaRef}
+        onPromptFocus={() => setFocusedPane("prompt")}
       />
       <RunStream
         task={task}
@@ -156,6 +183,13 @@ function ManagedReviewAvailable({ projection }: { projection: ManagedProjection 
           onClose={() => setPreviewArtifactId(null)}
         />
       ) : null}
+      <ManagedKeyboardController
+        task={task}
+        focusedPane={focusedPane}
+        promptTextareaRef={promptTextareaRef}
+        onCycleFocus={(pane) => setFocusedPane(pane)}
+        onChanged={() => void window.minimal.snapshot().catch(() => {})}
+      />
     </div>
   );
 }
@@ -239,13 +273,16 @@ function TaskList({ projection, selectedTaskId, focused, onSelect, onFocus }: {
 
 /* ───────── task detail (centre column) ─────────────────────────────────── */
 
-function TaskDetail({ task, projection, focused, previewArtifactId, onPreviewArtifact, onChanged }: {
+function TaskDetail({ task, projection, focused, previewArtifactId, onPreviewArtifact, onChanged, promptFocused, promptTextareaRef, onPromptFocus }: {
   task: TaskView | undefined;
   projection: ManagedProjection;
   focused: boolean;
   previewArtifactId: string | null;
   onPreviewArtifact: (id: string | null) => void;
   onChanged?: () => void;
+  promptFocused: boolean;
+  promptTextareaRef: React.MutableRefObject<HTMLTextAreaElement | null>;
+  onPromptFocus: () => void;
 }) {
   // Derived lineage for the selected task — runs, invocations, intents,
   // leases, grants, context receipts, artifacts, closed attention items.
@@ -271,7 +308,13 @@ function TaskDetail({ task, projection, focused, previewArtifactId, onPreviewArt
     const recipes = projection.recipes.filter(recipe => recipe.projectId === task.projectId);
     const verifications = projection.verifications.filter(verification => verification.taskId === task.id);
     const reviews = projection.reviews.filter(review => review.taskId === task.id);
-    return { runs, invocations, intents, grants, receipts, artifacts, attention, recipes, verifications, reviews };
+    // M3c.5 — open attention items per task drive the action-legality
+    // checks (`answer` / `continue` need an open `decision`).
+    const openAttentionForTask = projection.openAttention.filter(
+      item => item.taskId === task.id && item.state !== "dismissed" && item.state !== "resolved",
+    );
+    const openDecision = openAttentionForTask.find(item => item.kind === "decision") ?? null;
+    return { runs, invocations, intents, grants, receipts, artifacts, attention, recipes, verifications, reviews, openAttentionForTask, openDecision };
   }, [task, projection]);
 
   return (
@@ -298,6 +341,20 @@ function TaskDetail({ task, projection, focused, previewArtifactId, onPreviewArt
             <div><dt>Created</dt><dd>{formatTimestamp(task.createdAt)}</dd></div>
             <div><dt>Updated</dt><dd>{formatTimestamp(task.updatedAt)}</dd></div>
           </dl>
+
+          <PromptEditor
+            taskId={task.id}
+            promptFocused={promptFocused}
+            promptTextareaRef={promptTextareaRef}
+            onPromptFocus={onPromptFocus}
+          />
+
+          <ActionsSection
+            task={task}
+            runs={lineage?.runs ?? []}
+            openDecision={lineage?.openDecision ?? null}
+            onChanged={onChanged}
+          />
 
           <VerifierSection
             recipes={lineage?.recipes ?? []}
@@ -996,6 +1053,365 @@ function decodePreviewBody(base64: string): string {
   }
 }
 
+/* ───────── prompt editor (M3c.5) ───────────────────────────────────────── */
+
+/**
+ * M3c.5 — task-prompt drafts.
+ *
+ * Persists the prompt text into the `meta` table under
+ * `task-prompt-draft:<taskUuid>`. Same optimistic-update shape as
+ * `saveDraft`: the renderer tracks the live revision, the runtime
+ * refuses mismatches with `CONFLICT`, the editor rolls forward on
+ * success.
+ *
+ * Saves debounce 400ms after the last keystroke. The "Saved r{N}"
+ * footer shows the freshly assigned revision. The textarea itself
+ * is the third focus target in the three-pane focus model.
+ */
+const PROMPT_DRAFT_BASE_HASH = "0".repeat(64);
+const PROMPT_DRAFT_DEBOUNCE_MS = 400;
+
+function PromptEditor({ taskId, promptFocused, promptTextareaRef, onPromptFocus }: {
+  taskId: string;
+  promptFocused: boolean;
+  promptTextareaRef: React.MutableRefObject<HTMLTextAreaElement | null>;
+  onPromptFocus: () => void;
+}) {
+  type Draft = { content: string; baseHash: string; updatedAt: string; revision: number };
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [draftText, setDraftText] = useState<string>("");
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const liveRevisionRef = useRef<number>(0);
+
+  // Load on mount / when the task id changes.
+  useEffect(() => {
+    let cancelled = false;
+    setError(null);
+    window.minimal.readTaskPromptDraft(taskId)
+      .then((loaded) => {
+        if (cancelled) return;
+        if (loaded) {
+          setDraft(loaded);
+          setDraftText(loaded.content);
+          liveRevisionRef.current = loaded.revision;
+          setSavedAt(loaded.updatedAt);
+        } else {
+          setDraft(null);
+          setDraftText("");
+          liveRevisionRef.current = 0;
+          setSavedAt(null);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        setError(`Failed to load draft: ${String(reason)}`);
+      });
+    return () => { cancelled = true; };
+  }, [taskId]);
+
+  // Imperatively focus the textarea when `promptFocused` becomes true.
+  useEffect(() => {
+    if (promptFocused) promptTextareaRef.current?.focus();
+  }, [promptFocused, promptTextareaRef]);
+
+  // Debounced save: fires 400ms after the last keystroke.
+  useEffect(() => {
+    const expected = liveRevisionRef.current;
+    if (draft !== null && draftText === draft.content) return;
+    const timer = setTimeout(() => {
+      const expectedAtSave = expected;
+      window.minimal.saveTaskPromptDraft(taskId, {
+        content: draftText,
+        baseHash: PROMPT_DRAFT_BASE_HASH,
+        expectedRevision: expectedAtSave,
+      }).then((saved) => {
+        liveRevisionRef.current = saved.revision;
+        setDraft(saved);
+        setSavedAt(saved.updatedAt);
+        setError(null);
+      }).catch((reason: unknown) => {
+        const message = String(reason instanceof Error ? reason.message : reason);
+        if (/CONFLICT|expected r/i.test(message)) {
+          // Another writer beat us; reload the canonical draft and
+          // surface the conflict so the user can reconcile.
+          window.minimal.readTaskPromptDraft(taskId)
+            .then((loaded) => {
+              if (loaded) {
+                liveRevisionRef.current = loaded.revision;
+                setDraft(loaded);
+                setDraftText(loaded.content);
+                setSavedAt(loaded.updatedAt);
+              }
+              setError(`Draft conflict: another writer updated it; loaded latest r${liveRevisionRef.current}.`);
+            })
+            .catch(() => {});
+        } else {
+          setError(`Save failed: ${message}`);
+        }
+      });
+    }, PROMPT_DRAFT_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [draftText, draft, taskId]);
+
+  return (
+    <section className="managed-section managed-prompt-editor" data-section="prompt-editor">
+      <h3>
+        Prompt editor
+        {draft ? (
+          <span className="managed-column-meta">r{draft.revision}</span>
+        ) : (
+          <span className="managed-column-meta">draft</span>
+        )}
+      </h3>
+      <textarea
+        ref={promptTextareaRef}
+        className="managed-prompt-textarea"
+        value={draftText}
+        rows={6}
+        spellCheck
+        aria-label="Task prompt draft"
+        data-prompt-editor="true"
+        placeholder="Draft the prompt that will be sent to the provider on the next attempt…"
+        onFocus={onPromptFocus}
+        onChange={event => setDraftText(event.target.value)}
+      />
+      <div className="managed-prompt-footer">
+        {savedAt ? (
+          <span>Saved r{draft?.revision ?? 0} at {formatTimestamp(savedAt)}</span>
+        ) : (
+          <span>Not yet saved</span>
+        )}
+        <span className="managed-column-meta">{draftText.length} chars</span>
+      </div>
+      {error ? <p className="managed-empty managed-empty-error">{error}</p> : null}
+    </section>
+  );
+}
+
+/* ───────── actions section (M3c.5) ─────────────────────────────────────── */
+
+/**
+ * M3c.5 — four managed-work actions: `Answer`, `Continue`, `New attempt`,
+ * `Stop`. Each button is disabled when its preconditions aren't met
+ * (e.g. `Continue` requires an open `decision` attention item, `Stop`
+ * is illegal on a terminal run).
+ *
+ * Conflicts surface inline; `onChanged()` triggers a re-snapshot so
+ * the projection refreshes.
+ */
+function ActionsSection({ task, runs, openDecision, onChanged }: {
+  task: TaskView;
+  runs: RunView[];
+  openDecision: AttentionItemView | null;
+  onChanged?: () => void;
+}) {
+  // Latest run drives Stop / New attempt legality.
+  const latestRun = runs.length > 0 ? runs[runs.length - 1] : null;
+  const isRunTerminal = latestRun
+    ? latestRun.status === "cancelled" || latestRun.status === "completed" || latestRun.status === "failed"
+    : true;
+  const canStop = latestRun !== null && !isRunTerminal;
+  const canNewAttempt = latestRun !== null && !isRunTerminal;
+  const canAnswer = openDecision !== null;
+  const canContinue = openDecision !== null;
+
+  // Inline reply input state.
+  const [replyText, setReplyText] = useState("");
+  const [showReplyInput, setShowReplyInput] = useState(false);
+
+  return (
+    <section className="managed-section managed-actions" data-section="actions">
+      <h3>
+        Actions
+        <span className="managed-column-meta" title="Keyboard: a / c / n / s with detail focused">a c n s</span>
+      </h3>
+      <div className="managed-action-row">
+        <button
+          type="button"
+          className="managed-button managed-button-answer"
+          disabled={!canAnswer}
+          onClick={() => {
+            if (canAnswer) setShowReplyInput(value => !value);
+          }}
+          aria-label="Answer the open decision"
+        >
+          <MessageSquare size={12} aria-hidden /> Answer (a)
+        </button>
+        <button
+          type="button"
+          className="managed-button managed-button-continue"
+          disabled={!canContinue}
+          onClick={() => {
+            if (canContinue && openDecision) {
+              void runContinueInvocation(task, openDecision.id, onChanged);
+            }
+          }}
+          aria-label="Continue the open decision by spawning a continuation invocation"
+        >
+          <CornerDownLeft size={12} aria-hidden /> Continue (c)
+        </button>
+        <button
+          type="button"
+          className="managed-button managed-button-new-attempt"
+          disabled={!canNewAttempt}
+          onClick={() => {
+            if (canNewAttempt && latestRun) {
+              void runNewAttempt(task, latestRun.id, onChanged);
+            }
+          }}
+          aria-label="Spawn a fresh invocation for the latest run"
+        >
+          <RotateCcw size={12} aria-hidden /> New attempt (n)
+        </button>
+        <button
+          type="button"
+          className="managed-button managed-button-stop"
+          disabled={!canStop}
+          onClick={() => {
+            if (canStop && latestRun) {
+              void runStop(task, latestRun.id, onChanged);
+            }
+          }}
+          aria-label="Stop the latest run"
+        >
+          <StopCircle size={12} aria-hidden /> Stop (s)
+        </button>
+      </div>
+      {showReplyInput && openDecision ? (
+        <div className="managed-action-row">
+          <input
+            type="text"
+            className="managed-action-input"
+            value={replyText}
+            placeholder="Reply to the decision…"
+            onChange={event => setReplyText(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === "Enter" && replyText.trim().length > 0) {
+                void runAnswer(openDecision.id, replyText, () => {
+                  setReplyText("");
+                  setShowReplyInput(false);
+                  onChanged?.();
+                });
+              } else if (event.key === "Escape") {
+                setShowReplyInput(false);
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="managed-button managed-button-primary"
+            disabled={replyText.trim().length === 0}
+            onClick={() => {
+              if (replyText.trim().length === 0) return;
+              void runAnswer(openDecision.id, replyText, () => {
+                setReplyText("");
+                setShowReplyInput(false);
+                onChanged?.();
+              });
+            }}
+          >
+            <Save size={12} aria-hidden /> Submit
+          </button>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/* ───────── keyboard controller (M3c.5) ─────────────────────────────────── */
+
+/**
+ * M3c.5 — document-level keyboard handler.
+ *
+ * `Tab` / `Shift+Tab` cycles the three-pane focus model
+ * (list → detail → prompt → list). `Enter` only promotes list → detail
+ * (the contract promised at the file header). The four letter keys
+ * (`a` / `c` / `n` / `s`) dispatch the corresponding Action when the
+ * detail pane is focused AND `document.activeElement` is not an
+ * `<input>` / `<textarea>` (so typing in the prompt editor doesn't
+ * hijack the action hotkeys). `Escape` pops prompt → detail when no
+ * preview drawer is open.
+ *
+ * Legality mirrors `ActionsSection`: an illegal action no-ops even
+ * when the key is pressed.
+ */
+function ManagedKeyboardController({ task, focusedPane, promptTextareaRef, onCycleFocus, onChanged }: {
+  task: TaskView | undefined;
+  focusedPane: "list" | "detail" | "prompt";
+  promptTextareaRef: React.MutableRefObject<HTMLTextAreaElement | null>;
+  onCycleFocus: (pane: "list" | "detail" | "prompt") => void;
+  onChanged?: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target;
+      const activeIsTextbox = target instanceof HTMLElement
+        && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      // Tab cycling — always allowed unless inside a textbox.
+      if (event.key === "Tab" && !event.shiftKey) {
+        if (activeIsTextbox) return;
+        event.preventDefault();
+        const order: Array<"list" | "detail" | "prompt"> = ["list", "detail", "prompt"];
+        const idx = order.indexOf(focusedPane);
+        const next = order[(idx + 1) % order.length] ?? "list";
+        onCycleFocus(next);
+        if (next === "prompt") promptTextareaRef.current?.focus();
+        return;
+      }
+      if (event.key === "Tab" && event.shiftKey) {
+        if (activeIsTextbox) return;
+        event.preventDefault();
+        const order: Array<"list" | "detail" | "prompt"> = ["prompt", "detail", "list"];
+        const idx = order.indexOf(focusedPane);
+        const next = order[(idx + 1) % order.length] ?? "detail";
+        onCycleFocus(next);
+        return;
+      }
+      // Escape pops prompt → detail.
+      if (event.key === "Escape" && focusedPane === "prompt" && !activeIsTextbox) {
+        event.preventDefault();
+        onCycleFocus("detail");
+        return;
+      }
+      // Letter-key hotkeys require detail-pane focus + no textbox.
+      if (focusedPane !== "detail") return;
+      if (activeIsTextbox) return;
+      if (!task) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      // Cheap legality probe via the projection: skip the openDecision
+      // check by reading straight off the snapshot is too heavy; we
+      // defer to the button click handler which already enforces
+      // legality. The hotkey only fires when the user has explicit
+      // detail focus; the click handler will silently no-op on an
+      // illegal action.
+      if (event.key === "a") {
+        event.preventDefault();
+        document.querySelector<HTMLButtonElement>(".managed-button-answer")?.click();
+        return;
+      }
+      if (event.key === "c") {
+        event.preventDefault();
+        document.querySelector<HTMLButtonElement>(".managed-button-continue")?.click();
+        return;
+      }
+      if (event.key === "n") {
+        event.preventDefault();
+        document.querySelector<HTMLButtonElement>(".managed-button-new-attempt")?.click();
+        return;
+      }
+      if (event.key === "s") {
+        event.preventDefault();
+        document.querySelector<HTMLButtonElement>(".managed-button-stop")?.click();
+        return;
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [task, focusedPane, promptTextareaRef, onCycleFocus, onChanged]);
+  return null;
+}
+
 /* ───────── IPC shims (M3c.2) ───────────────────────────────────────────── */
 
 async function runVerifier(taskId: string, recipeId: string, onChanged?: () => void): Promise<void> {
@@ -1022,6 +1438,81 @@ async function decideReview(reviewId: string, decision: "accept" | "reject", onC
     onChanged?.();
   } catch (error) {
     console.error("record-review-decision failed:", error);
+    onChanged?.();
+  }
+}
+
+/* ───────── IPC shims (M3c.5) ───────────────────────────────────────────── */
+
+async function runAnswer(attentionId: string, reply: string, onChanged?: () => void): Promise<void> {
+  try {
+    await window.minimal.answerAttention(attentionId, { reply, answeredBy: "user" });
+    onChanged?.();
+  } catch (error) {
+    console.error("answer-attention failed:", error);
+    onChanged?.();
+  }
+}
+
+async function runContinueInvocation(task: TaskView, attentionId: string, onChanged?: () => void): Promise<void> {
+  // Carry the task's recorded provider/model forward; supply an
+  // empty args/scope; the runtime derives the deadline from
+  // MAX_DEADLINE_MS.
+  try {
+    const result = await window.minimal.continueInvocation(attentionId, {
+      providerVersion: task.providerVersion ?? "v1",
+      model: task.model ?? "default",
+      accountMode: task.accountMode ?? "authenticated",
+      args: {},
+      scope: {},
+      deadlineAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      attemptedBy: "user",
+    });
+    if (result.kind === "conflict") {
+      console.warn("continue-invocation conflict:", result.reason);
+    }
+    onChanged?.();
+  } catch (error) {
+    console.error("continue-invocation failed:", error);
+    onChanged?.();
+  }
+}
+
+async function runNewAttempt(task: TaskView, runId: string, onChanged?: () => void): Promise<void> {
+  try {
+    const now = Date.now();
+    const result = await window.minimal.newAttempt({
+      runId,
+      idempotencyKey: `new-attempt:${runId}:${now}`,
+      canonicalDigest: "0".repeat(64),
+      providerVersion: task.providerVersion ?? "v1",
+      model: task.model ?? "default",
+      accountMode: task.accountMode ?? "authenticated",
+      method: "agent-run",
+      args: {},
+      scope: {},
+      deadlineAt: new Date(now + 10 * 60_000).toISOString(),
+      requestedBy: "user",
+    });
+    if (result.kind === "conflict") {
+      console.warn("new-attempt conflict:", result.reason);
+    }
+    onChanged?.();
+  } catch (error) {
+    console.error("new-attempt failed:", error);
+    onChanged?.();
+  }
+}
+
+async function runStop(task: TaskView, runId: string, onChanged?: () => void): Promise<void> {
+  try {
+    await window.minimal.requestStop(runId, {
+      reason: `User-requested stop from ${task.id.slice(0, 8)}`,
+      requestedBy: "user",
+    });
+    onChanged?.();
+  } catch (error) {
+    console.error("request-stop failed:", error);
     onChanged?.();
   }
 }

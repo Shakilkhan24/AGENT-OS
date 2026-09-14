@@ -131,5 +131,20 @@ const api: API = {
   // `src/main/index.ts:124-137` picks up the new method key.
   renderCandidateDiff: (runId) =>
     call("render-candidate-diff", runId),
+  // M3c.5 — task-prompt drafts + four managed-work actions.
+  readTaskPromptDraft: (taskId) =>
+    call("read-task-prompt-draft", taskId),
+  saveTaskPromptDraft: (taskId, input) =>
+    call("save-task-prompt-draft", taskId, input),
+  removeTaskPromptDraft: (taskId) =>
+    call("remove-task-prompt-draft", taskId),
+  answerAttention: (id, input) =>
+    call("answer-attention", id, input),
+  continueInvocation: (id, input) =>
+    call("continue-invocation", id, input),
+  newAttempt: (input) =>
+    call("new-attempt", input),
+  requestStop: (runId, input) =>
+    call("request-stop", runId, input),
 };
 contextBridge.exposeInMainWorld("minimal", api);

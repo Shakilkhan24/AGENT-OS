@@ -264,7 +264,102 @@ export const attentionItemSchema = z.object({
   revision: z.number().int().min(0).max(1024),
   state: attentionStateSchema,
   payloadJson: z.string().max(64 * 1024),
+  snoozedUntil: timestampSchema.nullable(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
 }).strict();
 export type AttentionItem = z.infer<typeof attentionItemSchema>;
+
+// ── VerificationRecipe (M3c.2) ──────────────────────────────────────────────
+
+export const verificationStatusSchema = z.enum(["running", "passed", "failed", "error"]);
+export type VerificationStatus = z.infer<typeof verificationStatusSchema>;
+
+/**
+ * A verification recipe is a per-project configured command the
+ * runtime can spawn against a run's candidate. Recipes live per
+ * project (so a project's checks can be reused across its tasks);
+ * the SHA-256 `configurationRevision` is the binding key a review
+ * carries forward — when the recipe configuration changes, any
+ * open review is invalidated.
+ */
+export const verificationRecipeSchema = z.object({
+  id: idSchema,
+  projectId: z.string().max(256),
+  name: z.string().min(1).max(256),
+  command: z.string().min(1).max(1024),
+  argvJson: z.string().max(8 * 1024),
+  envJson: z.string().max(8 * 1024),
+  assertionPattern: z.string().max(1024).nullable(),
+  required: z.boolean(),
+  configurationRevision: z.string().regex(/^[0-9a-f]{64}$/),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+}).strict();
+export type VerificationRecipe = z.infer<typeof verificationRecipeSchema>;
+
+/**
+ * One verifier run. The `candidateBase`/`candidateTree`/`candidateDiff`
+ * triple is the candidate identity the bound review records. The
+ * `configurationRevision` is the recipe's binding key at spawn time
+ * (a recipe revision change after the verification completes
+ * invalidates the review).
+ */
+export const verificationSchema = z.object({
+  id: idSchema,
+  taskId: idSchema.nullable(),
+  runId: idSchema.nullable(),
+  recipeId: idSchema.nullable(),
+  command: z.string().min(1).max(1024),
+  cwd: z.string().min(1).max(4096),
+  argvJson: z.string().max(8 * 1024),
+  envJson: z.string().max(8 * 1024),
+  configurationRevision: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  candidateBase: commitShaSchema.nullable(),
+  candidateTree: commitShaSchema.nullable(),
+  candidateDiff: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  status: verificationStatusSchema,
+  exitCode: z.number().int().nullable(),
+  signal: z.string().min(1).max(64).nullable(),
+  startedAt: timestampSchema.nullable(),
+  endedAt: timestampSchema.nullable(),
+  assertionCountsJson: z.string().max(8 * 1024).nullable(),
+  requiredCheckResultsJson: z.string().max(64 * 1024),
+  stdoutTailJson: z.string().max(64 * 1024),
+  stderrTailJson: z.string().max(64 * 1024),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+}).strict();
+export type Verification = z.infer<typeof verificationSchema>;
+
+// ── Review (M3c.2) ──────────────────────────────────────────────────────────
+
+export const reviewStatusSchema = z.enum(["open", "accepted", "rejected", "invalidated"]);
+export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
+
+export const reviewDecisionSchema = z.enum(["accepted", "rejected"]);
+export type ReviewDecision = z.infer<typeof reviewDecisionSchema>;
+
+/**
+ * The acceptance state machine bound to (candidate identity triple,
+ * configuration revision, evidence verification ids). The acceptance
+ * gate (`acceptReview`) refuses unless every required check on every
+ * backing verification is `passed`.
+ */
+export const reviewSchema = z.object({
+  id: idSchema,
+  taskId: idSchema.nullable(),
+  runId: idSchema.nullable(),
+  evidenceVerificationIdsJson: z.string().max(64 * 1024),
+  candidateBase: commitShaSchema.nullable(),
+  candidateTree: commitShaSchema.nullable(),
+  candidateDiff: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  configurationRevision: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  status: reviewStatusSchema,
+  decision: reviewDecisionSchema.nullable(),
+  decidedBy: z.string().min(1).max(256).nullable(),
+  decisionNote: z.string().max(8 * 1024).nullable(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+}).strict();
+export type Review = z.infer<typeof reviewSchema>;

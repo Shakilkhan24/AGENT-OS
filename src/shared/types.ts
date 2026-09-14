@@ -230,6 +230,98 @@ export interface API {
     runId: string; base: string; tree: string;
     bytes: number; truncated: boolean; body: string;
   }>;
+  /**
+   * M3c.5 — read the persisted task-prompt draft. Returns `null`
+   * when no draft has been saved. The draft lives in the `meta`
+   * table (NOT the file-bound `draft` table).
+   */
+  readTaskPromptDraft(taskId: string): Promise<{
+    content: string; baseHash: string; updatedAt: string; revision: number;
+  } | null>;
+  /**
+   * M3c.5 — save a task-prompt draft with optimistic-update
+   * revision. `expectedRevision === null` means "create or replace
+   * unconditionally"; otherwise the runtime rejects mismatches
+   * with `CONFLICT`.
+   */
+  saveTaskPromptDraft(
+    taskId: string,
+    input: { content: string; baseHash: string; expectedRevision: number | null },
+  ): Promise<{ content: string; baseHash: string; updatedAt: string; revision: number }>;
+  /** M3c.5 — remove a task-prompt draft. Idempotent. */
+  removeTaskPromptDraft(taskId: string): Promise<void>;
+  /**
+   * M3c.5 — resolve an open `decision` attention item with a
+   * human reply. The reply is recorded in a new `decision` row at
+   * `revision + 1` under the same `issueIdentity`. Returns the
+   * resolved row view AND the new reply row view.
+   */
+  answerAttention(
+    id: string,
+    input: { reply: string; answeredBy: string },
+  ): Promise<{
+    resolved: {
+      id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop";
+      issueIdentity: string; revision: number;
+      state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
+      payloadJson: string; snoozedUntil: string | null;
+      createdAt: string; updatedAt: string;
+    };
+    followUp: {
+      id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop";
+      issueIdentity: string; revision: number;
+      state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
+      payloadJson: string; snoozedUntil: string | null;
+      createdAt: string; updatedAt: string;
+    };
+  }>;
+  /**
+   * M3c.5 — resolve the open `decision` AND spawn a continuation
+   * invocation via `executeOnce` (fresh idempotencyKey, attempt =
+   * previous + 1, `parentInvocationId` lineage). `ok` carries the
+   * new `invocationId` and `dispatchIntentId`; `conflict` carries
+   * the human reason (e.g. "Run is stopped").
+   */
+  continueInvocation(
+    attentionId: string,
+    input: {
+      providerVersion: string; model: string;
+      accountMode: "anonymous" | "authenticated" | "trusted-host";
+      args?: unknown; scope?: unknown; deadlineAt: string; attemptedBy: string;
+    },
+  ): Promise<
+    | { kind: "ok"; invocationId: string; dispatchIntentId: string; attentionId: string }
+    | { kind: "conflict"; reason: string }
+  >;
+  /**
+   * M3c.5 — spawn a fresh invocation for the supplied run (same
+   * `runId`, attempt = previous + 1, fresh idempotencyKey,
+   * `parentInvocationId` lineage). Same envelope shape as
+   * `continueInvocation`.
+   */
+  newAttempt(input: {
+    runId: string;
+    idempotencyKey: string;
+    canonicalDigest: string;
+    providerVersion: string; model: string;
+    accountMode: "anonymous" | "authenticated" | "trusted-host";
+    method: string;
+    args?: unknown; scope?: unknown;
+    deadlineAt: string; requestedBy: string;
+  }): Promise<
+    | { kind: "ok"; invocationId: string; dispatchIntentId: string; attentionId: string }
+    | { kind: "conflict"; reason: string }
+  >;
+  /**
+   * M3c.5 — stop a run. Thin IPC exposure of `requestStop`; the
+   * orchestrator flips the run to `cancelled` AND adds the runId
+   * to the process-global stop flag so future `executeOnce` calls
+   * refuse to spawn. Idempotent on already-terminal runs.
+   */
+  requestStop(
+    runId: string,
+    input: { reason: string; requestedBy: string },
+  ): Promise<{ runId: string; status: "cancelled"; blockedExecuteOnce: true }>;
 }
 declare global {
   interface Window {

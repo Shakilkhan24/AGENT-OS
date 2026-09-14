@@ -658,3 +658,87 @@
   flex: 1;
   min-width: 0;
 }
+
+/* ───────── M3c.5 — prompt editor + actions + keyboard focus ───────── */
+
+.managed-prompt-editor .managed-prompt-textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  padding: 8px 10px;
+  background: #111512;
+  color: #dce1dc;
+  border: 1px solid #303830;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  outline: none;
+}
+.managed-prompt-editor .managed-prompt-textarea:focus {
+  border-color: #4f7a4f;
+  box-shadow: 0 0 0 1px #2d4f2d inset;
+}
+.managed-prompt-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: #95a08f;
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.managed-actions .managed-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.managed-action-input {
+  grid-column: 1 / span 2;
+  padding: 6px 8px;
+  background: #111512;
+  color: #dce1dc;
+  border: 1px solid #303830;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 11.5px;
+}
+.managed-action-input:focus {
+  outline: none;
+  border-color: #4f7a4f;
+  box-shadow: 0 0 0 1px #2d4f2d inset;
+}
+.managed-button-answer {
+  background: #2d3a2d;
+  border-color: #4f7a4f;
+  color: #d9efcc;
+}
+.managed-button-answer:hover:not(:disabled) {
+  background: #3a4f3a;
+}
+.managed-button-continue {
+  background: #2d3f4d;
+  border-color: #4f6f7a;
+  color: #cfe1ef;
+}
+.managed-button-continue:hover:not(:disabled) {
+  background: #3a4f5a;
+}
+.managed-button-new-attempt {
+  background: #3a3a2d;
+  border-color: #6f6f4f;
+  color: #efdfcc;
+}
+.managed-button-new-attempt:hover:not(:disabled) {
+  background: #4a4a3a;
+}
+.managed-button-stop {
+  background: #4f2d2d;
+  border-color: #7a4f4f;
+  color: #efcccc;
+}
+.managed-button-stop:hover:not(:disabled) {
+  background: #5a3a3a;
+}

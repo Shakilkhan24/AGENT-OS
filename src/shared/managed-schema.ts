@@ -152,3 +152,151 @@ export const renderCandidateDiffResultSchema = z.object({
   truncated: z.boolean(),
   body: z.string().max(512 * 1024),
 }).strict();
+
+// M3c.5 — task-prompt drafts + four managed-work actions.
+//
+// The drafts live in `meta` (the `draft` table is file-bound).
+// `read/save/remove-task-prompt-draft` mirror the M2 draft surface
+// but for `taskId`. `answer-attention` resolves an open `decision`
+// item and records the reply in the next-revision row; `continue-
+// invocation` resolves the open decision AND spawns the continuation
+// invocation; `new-attempt` spawns a fresh invocation for a run;
+// `request-stop` is the IPC exposure of the existing stop policy.
+
+/** Args: `[taskId]`. */
+export const readTaskPromptDraftInputSchema = z.tuple([
+  z.string().uuid(),
+]);
+
+/**
+ * Result is `null` when no draft is persisted. The shape mirrors
+ * the M3c.3 `transitionAttentionResultSchema` view.
+ */
+export const readTaskPromptDraftResultSchema = z.object({
+  content: z.string().max(64 * 1024),
+  baseHash: z.string().regex(/^[a-f0-9]{64}$/),
+  updatedAt: z.string().datetime(),
+  revision: z.number().int().min(1).max(1024),
+}).strict().nullable();
+
+/**
+ * Args: `[taskId, {content, baseHash, expectedRevision}]`.
+ * `expectedRevision === null` means "create or replace
+ * unconditionally" — used on the first save before any revision is
+ * known. Otherwise the runtime rejects mismatches with `CONFLICT`.
+ */
+export const saveTaskPromptDraftInputSchema = z.tuple([
+  z.string().uuid(),
+  z.object({
+    content: z.string().max(64 * 1024),
+    baseHash: z.string().regex(/^[a-f0-9]{64}$/),
+    expectedRevision: z.number().int().min(0).max(1024).nullable(),
+  }).strict(),
+]);
+
+export const saveTaskPromptDraftResultSchema = z.object({
+  content: z.string().max(64 * 1024),
+  baseHash: z.string().regex(/^[a-f0-9]{64}$/),
+  updatedAt: z.string().datetime(),
+  revision: z.number().int().min(1).max(1024),
+}).strict();
+
+/** Args: `[taskId]`. */
+export const removeTaskPromptDraftInputSchema = z.tuple([
+  z.string().uuid(),
+]);
+export const removeTaskPromptDraftResultSchema = z.void();
+
+/**
+ * Args: `[attentionId, {reply, answeredBy}]`. Resolves the open
+ * `decision` and writes the next-revision `decision` row carrying
+ * the reply in `payload_json`. Returns the resolved row view.
+ */
+export const answerAttentionInputSchema = z.tuple([
+  z.string().uuid(),
+  z.object({
+    reply: z.string().min(1).max(64 * 1024),
+    answeredBy: z.string().min(1).max(256),
+  }).strict(),
+]);
+export const answerAttentionResultSchema = z.object({
+  resolved: transitionAttentionResultSchema,
+  followUp: transitionAttentionResultSchema,
+}).strict();
+
+/**
+ * Args: `[attentionId, {...providerModel..., args, scope,
+ * deadlineAt, attemptedBy}]`. Resolves the open `decision` and
+ * spawns a continuation invocation via `executeOnce`.
+ */
+export const continueInvocationInputSchema = z.tuple([
+  z.string().uuid(),
+  z.object({
+    providerVersion: z.string().min(1).max(256),
+    model: z.string().min(1).max(256),
+    accountMode: z.enum(["anonymous", "authenticated", "trusted-host"]),
+    args: z.unknown().default({}),
+    scope: z.unknown().default({}),
+    deadlineAt: z.string().datetime(),
+    attemptedBy: z.string().min(1).max(256),
+  }).strict(),
+]);
+
+/**
+ * Result union. `ok` carries the freshly minted `invocationId` and
+ * `dispatchIntentId`; `conflict` carries the human-readable reason
+ * (e.g. "Run is stopped", "executeOnce returned ambiguous: ...").
+ * `attentionId` is the optional attention row the action was wired
+ * against (`continueInvocation` carries the prior open decision;
+ * `newAttempt` is empty string since it takes no attention row).
+ */
+export const continueInvocationResultSchema = z.union([
+  z.object({
+    kind: z.literal("ok"),
+    invocationId: z.string().uuid(),
+    dispatchIntentId: z.string().uuid(),
+    attentionId: z.string().min(0).max(64),
+  }).strict(),
+  z.object({
+    kind: z.literal("conflict"),
+    reason: z.string().min(1).max(1024),
+  }).strict(),
+]);
+
+/**
+ * Args: `[newAttemptInput]`. Spawns a fresh invocation for the
+ * supplied `runId`; `parentInvocationId` is derived from the latest
+ * invocation on the run.
+ */
+export const newAttemptInputSchema = z.tuple([
+  z.object({
+    runId: z.string().uuid(),
+    idempotencyKey: z.string().trim().min(1).max(256),
+    canonicalDigest: z.string().regex(/^[0-9a-f]{64}$/),
+    providerVersion: z.string().min(1).max(256),
+    model: z.string().min(1).max(256),
+    accountMode: z.enum(["anonymous", "authenticated", "trusted-host"]),
+    method: z.string().min(1).max(128),
+    args: z.unknown().default({}),
+    scope: z.unknown().default({}),
+    deadlineAt: z.string().datetime(),
+    requestedBy: z.string().min(1).max(256),
+  }).strict(),
+]);
+
+export const newAttemptResultSchema = continueInvocationResultSchema;
+
+/** Args: `[runId, {reason, requestedBy}]`. */
+export const requestStopInputSchema = z.tuple([
+  z.string().uuid(),
+  z.object({
+    reason: z.string().min(1).max(256),
+    requestedBy: z.string().min(1).max(256),
+  }).strict(),
+]);
+
+export const requestStopResultSchema = z.object({
+  runId: z.string().uuid(),
+  status: z.literal("cancelled"),
+  blockedExecuteOnce: z.literal(true),
+}).strict();
