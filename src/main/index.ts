@@ -13,8 +13,6 @@ import { Logger, configureLogging, log } from "./logging";
 import { runWithWatchdog } from "./shutdown";
 import { ProtocolDispatcher } from "./protocol-dispatcher";
 import { profilePaths } from "./profile-runtime";
-import { RuntimeWorkspace } from "../runtime/workspace";
-import type { RuntimeEndpoint } from "../runtime/control-server";
 import { ControlClient } from "../runtime/control-client";
 import { AppError } from "../shared/errors";
 import { API_VERSION, methods, parseSignal, parseResult, type Method, type RequestArgs, type Result, type InvocationContext } from "../shared/protocol";
@@ -24,10 +22,7 @@ if (process.env.MINIMAL_DATA_DIR)
   app.setPath("userData", path.resolve(process.env.MINIMAL_DATA_DIR));
 app.setName("MINIMAL");
 const locked = app.requestSingleInstanceLock();
-const REQUIRE_RUNTIME_LOCK = process.env.MINIMAL_REQUIRE_RUNTIME_LOCK === "1";
 let window: BrowserWindow | undefined;
-let workspace: RuntimeWorkspace | undefined;
-let endpoint: RuntimeEndpoint | undefined;
 let client: ControlClient | undefined;
 let runtime: RuntimeHandle | undefined;
 let runtimeStarted = false;
@@ -35,7 +30,6 @@ let quitRequested = false;
 const pendingRequests = new Set<Promise<unknown>>();
 const protocol = new ProtocolDispatcher();
 const detach = () => {
-  endpoint?.detachView();
   client?.close();
 };
 if (!locked) app.quit();
@@ -50,38 +44,32 @@ else {
       const location = path.join(__dirname, "../renderer/index.html");
       const rendererUrl = pathToFileURL(location).href;
       const directory = app.getPath("userData");
+      // The runtime owns its own logging (it sees workspace settings on open); the
+      // desktop logger simply captures startup, IPC and shutdown lines.
       configureLogging(new Logger(path.join(directory, "logs")));
       const helpersDir = path.join(__dirname, "../helpers");
-      if (REQUIRE_RUNTIME_LOCK) {
-        // FUTURE M1.3+M1.4: the runtime lives in a separate, OS-locked process.
-        const paths = profilePaths(directory);
-        const resolved = resolveRuntimePaths(helpersDir, path.join(__dirname, ".."));
-        runtime = await launchRuntime({
-          dataDir: directory,
-          helpersDir,
-          executable: resolved.executable,
-          runtimeEntry: resolved.runtimeEntry,
-          runtimeDir: paths.runtime,
-          socketPath: paths.socket,
-          lockPath: paths.lock,
-        });
-        runtimeStarted = true;
-        client = new ControlClient(paths.socket,
-          { profileKey: paths.key, token: runtime.token },
-          message => { if (window && !window.isDestroyed()) window.webContents.send(message.name, message.envelope); });
-        await client.ready;
-        log({ level: "info", source: "application", event: "started", fields: {
-          version: app.getVersion(), mode: "runtime-child", pid: runtime.pid, incarnation: runtime.incarnation,
-        } });
-      } else {
-        workspace = await RuntimeWorkspace.open(directory, helpersDir, app.getVersion());
-        configureLogging(new Logger(path.join(directory, "logs"), workspace.settings.logRetentionDays));
-        log({ level: "info", source: "application", event: "started", fields: { version: app.getVersion() } });
-        endpoint = workspace.connect({ connectionId: crypto.randomUUID(), profileKey: profilePaths(directory).key, principal: "desktop" }, message => {
-          if (window && !window.isDestroyed()) window.webContents.send(message.name, message.envelope);
-        });
-        runtimeStarted = true;
-      }
+      const paths = profilePaths(directory);
+      const resolved = resolveRuntimePaths(helpersDir, path.join(__dirname, ".."));
+      // M1.3+M1.4: the runtime is a separate, OS-locked Node-mode Electron process
+      // gated on the per-profile lock inode. `client.ready` blocks until the
+      // welcome round-trip succeeds, so subsequent IPC calls cannot precede auth.
+      runtime = await launchRuntime({
+        dataDir: directory,
+        helpersDir,
+        executable: resolved.executable,
+        runtimeEntry: resolved.runtimeEntry,
+        runtimeDir: paths.runtime,
+        socketPath: paths.socket,
+        lockPath: paths.lock,
+      });
+      runtimeStarted = true;
+      client = new ControlClient(paths.socket,
+        { profileKey: paths.key, token: runtime.token },
+        message => { if (window && !window.isDestroyed()) window.webContents.send(message.name, message.envelope); });
+      await client.ready;
+      log({ level: "info", source: "application", event: "started", fields: {
+        version: app.getVersion(), mode: "runtime-child", pid: runtime.pid, incarnation: runtime.incarnation,
+      } });
       electronSession.defaultSession.setPermissionRequestHandler(
         (_contents, _permission, callback) => callback(false),
       );
@@ -136,27 +124,15 @@ else {
       for (const channel of Object.keys(methods) as Method[]) {
         if (channel === "read-clipboard" || channel === "write-clipboard" || channel === "choose-directory") continue;
         wire(channel, async (args, context) => {
-          if (client) {
-            const cancel = () => client!.cancel(context.requestId);
-            context.signal.addEventListener("abort", cancel, { once: true });
-            try {
-              context.signal.throwIfAborted();
-              const response = await client!.dispatch({ apiVersion: API_VERSION, id: context.requestId,
-                correlationId: context.correlationId, deadlineAt: context.deadlineAt, method: channel, args });
-              if (!response.ok) throw new AppError(response.error.code, response.error.message, response.error);
-              return parseResult(channel, args, response.result);
-            } finally { context.signal.removeEventListener("abort", cancel); }
-          } else {
-            const cancel = () => endpoint!.cancel(context.requestId);
-            context.signal.addEventListener("abort", cancel, { once: true });
-            try {
-              context.signal.throwIfAborted();
-              const response = await endpoint!.dispatch({ apiVersion: API_VERSION, id: context.requestId,
-                correlationId: context.correlationId, deadlineAt: context.deadlineAt, method: channel, args });
-              if (!response.ok) throw new AppError(response.error.code, response.error.message, response.error);
-              return parseResult(channel, args, response.result);
-            } finally { context.signal.removeEventListener("abort", cancel); }
-          }
+          const cancel = () => client!.cancel(context.requestId);
+          context.signal.addEventListener("abort", cancel, { once: true });
+          try {
+            context.signal.throwIfAborted();
+            const response = await client!.dispatch({ apiVersion: API_VERSION, id: context.requestId,
+              correlationId: context.correlationId, deadlineAt: context.deadlineAt, method: channel, args });
+            if (!response.ok) throw new AppError(response.error.code, response.error.message, response.error);
+            return parseResult(channel, args, response.result);
+          } finally { context.signal.removeEventListener("abort", cancel); }
         });
       }
       for (const channel of ["resize", "acknowledge"] as const)
@@ -164,8 +140,7 @@ else {
           try {
             trusted(event);
             const args = parseSignal(channel, value);
-            if (client) client.signal({ type: "signal", name: channel, envelope: { apiVersion: API_VERSION, args } });
-            else endpoint!.signal({ type: "signal", name: channel, envelope: { apiVersion: API_VERSION, args } });
+            client!.signal({ type: "signal", name: channel, envelope: { apiVersion: API_VERSION, args } });
           } catch (error) {
             log({ level: "warning", source: "ipc", event: "message-rejected",
               fields: { channel, kind: error instanceof Error ? error.name : "unknown" } });
@@ -226,23 +201,23 @@ const SHUTDOWN_FLUSH_BUDGET_MS = 5000;
 app.on("window-all-closed", () => app.quit());
 function flushBeforeQuit(event: Electron.Event) {
   // Flush pending state.json and event-journal writes before the process
-  // exits. Without this the debouncer's window can drop the last mutation.
-  // The watchdog caps the wait — see src/main/shutdown.ts.
+  // exits. The runtime drains its own state through SIGTERM; the desktop
+  // only closes the authenticated socket and signals the child. The watchdog
+  // caps the wait — see src/main/shutdown.ts.
   if (runtimeStarted) {
     event.preventDefault();
     if (shuttingDown) return;
     shuttingDown = true;
     detach();
     const watchdog = runWithWatchdog(async () => {
-      const pending = await Promise.allSettled([client ? client.dispatch({
+      const pending = await Promise.allSettled([client!.dispatch({
         apiVersion: API_VERSION, id: crypto.randomUUID(), correlationId: crypto.randomUUID(),
         deadlineAt: Date.now() + 1000, method: "snapshot", args: [],
-      }).catch(() => null) : Promise.resolve(null), protocol.close(), ...pendingRequests]);
-      if (client) client.close();
-      if (runtime) await runtime.stop("SIGTERM", SHUTDOWN_FLUSH_BUDGET_MS);
+      }).catch(() => null), protocol.close(), ...pendingRequests]);
+      client!.close();
+      await runtime!.stop("SIGTERM", SHUTDOWN_FLUSH_BUDGET_MS);
       const failure = pending.find(result => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
-      if (workspace) await workspace.close();
     }, {
       budgetMs: SHUTDOWN_FLUSH_BUDGET_MS,
       onTimeout: () => app.exit(1),
