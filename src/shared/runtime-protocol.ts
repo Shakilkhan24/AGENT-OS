@@ -20,7 +20,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
 ]);
 export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("response"), response: responseSchema }).strict(),
-  z.object({ type: z.literal("signal"), name: z.enum(["workspace-changed", "terminal-output", "terminal-exit"]), envelope: signalEnvelopeSchema }).strict(),
+  z.object({ type: z.literal("signal"), name: z.enum(["workspace-changed", "terminal-output", "terminal-exit", "terminal-input-progress"]), envelope: signalEnvelopeSchema }).strict(),
 ]);
 export type ClientSignal = Extract<z.infer<typeof clientMessageSchema>, { type: "signal" }>;
 export type ServerSignal = Extract<z.infer<typeof serverMessageSchema>, { type: "signal" }>;

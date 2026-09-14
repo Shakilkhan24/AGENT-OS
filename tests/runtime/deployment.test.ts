@@ -47,22 +47,31 @@ test("runtime_lock.py exits 73 on duplicate owner", async t => {
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await chmod(paths.parent, 0o700);
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
-  const first = await launchRuntime({
-    dataDir, helpersDir: path.resolve("dist/helpers"), executable: process.execPath,
-    runtimeEntry: path.resolve("dist/runtime/index.cjs"), runtimeDir: paths.runtime,
-    socketPath: paths.socket, lockPath: paths.lock,
-  });
-  t.after(async () => { try { await first.stop("SIGKILL", 1000); } catch {} await rm(paths.parent, { recursive: true, force: true }); });
-  let busy: unknown;
-  try {
-    await launchRuntime({
-      dataDir, helpersDir: path.resolve("dist/helpers"), executable: process.execPath,
-      runtimeEntry: path.resolve("dist/runtime/index.cjs"), runtimeDir: paths.runtime,
-      socketPath: paths.socket, lockPath: paths.lock, readyBudgetMs: 500,
-    });
-  } catch (error) { busy = error; }
-  assert.ok(busy instanceof AppError);
-  assert.equal((busy as AppError).failure.code, "BUSY");
+  // Spawn the helper directly so we exercise its 73-on-duplicate-owner path
+  // without going through `launchRuntime`'s attach-first shortcut (which would
+  // otherwise attach to the live runtime and never invoke the helper).
+  const { spawn } = await import("node:child_process");
+  const { once } = await import("node:events");
+  const helper = path.resolve("dist/helpers/runtime_lock.py");
+  const entry = path.resolve("dist/runtime/index.cjs");
+  const firstArgs = [helper, paths.lock, process.execPath, entry, paths.socket, dataDir, paths.runtime, path.resolve("dist/helpers")];
+  const firstChild = spawn("python3", firstArgs, { env: { ...process.env, MINIMAL_DATA_DIR: dataDir, ELECTRON_RUN_AS_NODE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  const readyDeadline = Date.now() + 10_000;
+  while (Date.now() < readyDeadline) {
+    try {
+      const ready = JSON.parse(await readFile(path.join(paths.runtime, "ready.json"), "utf8"));
+      if (ready.token) break;
+    } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+  }
+  const child = spawn("python3", firstArgs, { env: { ...process.env, MINIMAL_DATA_DIR: dataDir, ELECTRON_RUN_AS_NODE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", chunk => stderr += chunk.toString());
+  const [code] = await once(child, "exit");
+  assert.equal(code, 73, "helper must exit 73 on a duplicate owner");
+  assert.match(stderr, /BUSY|EADDRINUSE/);
+  // Tear down the original runtime child without going through the helper.
+  const originalPid = firstChild.pid!;
+  try { process.kill(originalPid, "SIGKILL"); } catch {}
 });
 
 test("the runtime entrypoint refuses to listen on a shared socket directory", async t => {

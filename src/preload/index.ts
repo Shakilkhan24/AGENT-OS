@@ -60,7 +60,8 @@ const api: API = {
     call("files", sessionId, request) as Promise<FileResults[A["action"]]>,
   attach: (id, cols, rows) => call("attach", id, cols, rows),
   detach: (token) => call("detach", token),
-  input: (token, data) => call("input", token, data),
+  input: (token, data) => call("input", token, data) as Promise<{ admitted: number }>,
+  cancelInput: (token) => call("cancel-input", token) as Promise<{ dropped: number }>,
   resize: (token, cols, rows) => {
     const value = { apiVersion: API_VERSION, args: [token, cols, rows] };
     parseSignal("resize", value); ipcRenderer.send("resize", value);
@@ -71,6 +72,7 @@ const api: API = {
   },
   readClipboard: () => call("read-clipboard"),
   writeClipboard: (text) => call("write-clipboard", text),
+  stopRuntime: () => ipcRenderer.invoke("stop-runtime") as Promise<{ accepted: boolean }>,
   onOutput: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) => {
       let parsed: [string, string];

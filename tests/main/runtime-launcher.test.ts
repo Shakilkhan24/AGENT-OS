@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { access, mkdtemp, rm, stat, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { launchRuntime } from "../../src/main/runtime-launcher";
+import { launchRuntime, tryAttachRuntime } from "../../src/main/runtime-launcher";
 import { profilePaths } from "../../src/main/profile-runtime";
 import { ControlClient } from "../../src/runtime/control-client";
 
@@ -121,4 +121,64 @@ test("launchRuntime refuses a stale ready.json from a previous crash", async t =
     const onDisk = JSON.parse(await readFile(readyPath, "utf8"));
     assert.notEqual(onDisk.token, "stale");
   } catch { /* unlinked is also valid */ }
+});
+
+test("tryAttachRuntime binds to the live runtime and a second launch attaches instead of spawning", { timeout: 25000 }, async t => {
+  if (!await hasTmux()) { t.skip("tmux not installed"); return; }
+  if (!await hasBundle()) { t.skip("dist/runtime/index.cjs missing — run `npm run build` first"); return; }
+  const parent = await mkdtemp(path.join(tmpdir(), "minimal-launcher-attach-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const dataDir = await mkdtemp(path.join(parent, "data-"));
+  const paths = profilePaths(dataDir);
+  await mkdir(paths.parent, { recursive: true, mode: 0o700 });
+  await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
+
+  // First launch spawns the runtime child.
+  const first = await launchRuntime({
+    dataDir, helpersDir: path.resolve("dist/helpers"), executable: process.execPath,
+    runtimeEntry: path.resolve("dist/runtime/index.cjs"), runtimeDir: paths.runtime,
+    socketPath: paths.socket, lockPath: paths.lock,
+  });
+  t.after(async () => { try { await first.stop("SIGTERM", 2000); } catch {} await rm(paths.parent, { recursive: true, force: true }); });
+  assert.equal(first.attached, undefined, "first launch spawns the child");
+
+  // The runtime is now serving. `tryAttachRuntime` must connect.
+  const attached = await tryAttachRuntime({ socketPath: paths.socket, runtimeDir: paths.runtime, profileKey: paths.key });
+  assert.ok(attached, "attach should succeed against a live runtime");
+  assert.equal(attached.attached, true);
+  assert.equal(attached.token, first.token);
+  assert.equal(attached.incarnation, first.incarnation);
+
+  // `stop()` on a detached handle is a no-op (it must not signal the live runtime).
+  const firstClient = new ControlClient(paths.socket, { profileKey: paths.key, token: first.token });
+  try { await firstClient.call("hello"); } finally { firstClient.close(); }
+  await attached.stop("SIGTERM", 500);
+  // The runtime must still be alive after a "stop" on the attached handle.
+  const probe = new ControlClient(paths.socket, { profileKey: paths.key, token: first.token });
+  try {
+    const welcome = await probe.ready;
+    assert.equal(welcome.incarnation, first.incarnation);
+  } finally { probe.close(); }
+
+  // `launchRuntime` invoked again must reuse the live runtime (no second child).
+  const second = await launchRuntime({
+    dataDir, helpersDir: path.resolve("dist/helpers"), executable: process.execPath,
+    runtimeEntry: path.resolve("dist/runtime/index.cjs"), runtimeDir: paths.runtime,
+    socketPath: paths.socket, lockPath: paths.lock,
+  });
+  t.after(async () => { try { await second.stop("SIGTERM", 500); } catch {} });
+  assert.equal(second.attached, true, "second launch attaches instead of spawning");
+  assert.equal(second.token, first.token);
+});
+
+test("tryAttachRuntime returns undefined when no live runtime owns the profile", { timeout: 10000 }, async t => {
+  const parent = await mkdtemp(path.join(tmpdir(), "minimal-attach-empty-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const dataDir = await mkdtemp(path.join(parent, "data-"));
+  const paths = profilePaths(dataDir);
+  await mkdir(paths.parent, { recursive: true, mode: 0o700 });
+  await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
+  // No ready.json, no socket — must return undefined (no spawn, no error).
+  const result = await tryAttachRuntime({ socketPath: paths.socket, runtimeDir: paths.runtime, profileKey: paths.key });
+  assert.equal(result, undefined);
 });

@@ -173,6 +173,20 @@ export function App() {
       }
     }
   };
+  const stopRuntime = useCallback(async () => {
+    // M1.6: explicit, user-initiated. The OS lock keeps the runtime alive across
+    // window closes, so this is the only way to actually terminate durable work.
+    // Confirmation is in-renderer to keep the desktop surface focused on chrome.
+    const accepted = window.confirm(
+      "Stop the runtime? All running terminals in this workspace will end and unsaved work will be lost. This cannot be undone.",
+    );
+    if (!accepted) return;
+    try {
+      await window.minimal.stopRuntime();
+    } catch (error) {
+      report(error);
+    }
+  }, [report]);
   const editAndRun = (item: TerminalView) => {
     if (!session) return;
     const candidate = item.currentDirectory || item.cwd;
@@ -230,10 +244,22 @@ export function App() {
             <ChevronRight size={13} />
             <strong>{session?.name || "Overview"}</strong>
           </div>
-          <span className="running-pill">
-            <span className={`dot ${snapshot.engineError ? "" : "live"}`} />
-            {snapshot.engineError ? "Status unavailable" : `${running} running`}
-          </span>
+          <div className="topbar-actions">
+            <span className="running-pill">
+              <span className={`dot ${snapshot.engineError ? "" : "live"}`} />
+              {snapshot.engineError ? "Status unavailable" : `${running} running`}
+            </span>
+            {/* M1.6: closing the window keeps the runtime alive. This is the only
+                in-app affordance to actually terminate it. */}
+            <button
+              className="secondary stop-runtime"
+              onClick={stopRuntime}
+              disabled={!ready}
+              title="Stop the runtime and end this workspace"
+            >
+              Stop runtime
+            </button>
+          </div>
         </header>
         {error && (
           <div className="error-toast" role="alert">

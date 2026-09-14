@@ -124,11 +124,14 @@ export interface API {
   files<A extends FileAction>(sessionId: string, request: A): Promise<FileResults[A["action"]]>;
   attach(terminalId: string, cols: number, rows: number): Promise<string>;
   detach(token: string): Promise<void>;
-  input(token: string, data: string): Promise<void>;
+  input(token: string, data: string): Promise<{ admitted: number }>;
+  cancelInput(token: string): Promise<{ dropped: number }>;
   resize(token: string, cols: number, rows: number): void;
   acknowledge(token: string, bytes: number): void;
   readClipboard(): Promise<string>;
   writeClipboard(text: string): Promise<void>;
+  /** M1.6: explicitly terminate the runtime child. Window close does not do this. */
+  stopRuntime(): Promise<{ accepted: boolean }>;
   onOutput(listener: (token: string, data: string) => void): () => void;
   onExit(listener: (token: string) => void): () => void;
   onStartupRecovered(listener: (message: string) => void): () => void;

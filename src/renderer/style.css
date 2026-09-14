@@ -403,6 +403,23 @@ h2 {
   padding: 6px 10px;
   background: #25301f;
 }
+.topbar-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.stop-runtime {
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  color: #c9b59b;
+  background: #2a2218;
+  border: 1px solid #4d3d28;
+}
+.stop-runtime:hover:not(:disabled) {
+  background: #332919;
+  border-color: #6c5535;
+}
 .session-header {
   padding: 28px 30px 26px;
   display: flex;

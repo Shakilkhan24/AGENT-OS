@@ -12,6 +12,7 @@ import { SessionFilesystem } from "../main/filesystem";
 import { TmuxEngine } from "../main/engine";
 import { ProtocolDispatcher } from "../main/protocol-dispatcher";
 import type { RuntimeEndpoint } from "./control-server";
+import { TerminalInputQueue, type InputQueueProgress } from "./input-queue";
 
 /** Domain ownership without Electron. One selected attachment is retained until M5. */
 export class RuntimeWorkspace {
@@ -23,8 +24,16 @@ export class RuntimeWorkspace {
   private stopped?: Promise<void>;
   private changeTimer?: ReturnType<typeof setTimeout>;
   private unsubscribe: () => void;
+  private readonly inputQueue: TerminalInputQueue;
   constructor(readonly service: SessionService, private drafts: DraftStore, readonly settings: Settings,
     private recovery: string | null, private appVersion: string) {
+    this.inputQueue = new TerminalInputQueue(async (token, data) => {
+      if (this.closing) throw new AppError("UNAVAILABLE", "Runtime is stopping");
+      if (this.attachment?.view.token !== token)
+        throw new AppError("CONFLICT", "Terminal selection changed; input was cancelled", { outcomeUnknown: true });
+      await this.attachment.view.input(data);
+    });
+    this.inputQueue.onProgress(snapshot => this.broadcastInputProgress(snapshot));
     this.unsubscribe = service.events.subscribe(() => {
       if (this.changeTimer || this.closing) return;
       this.changeTimer = setTimeout(() => {
@@ -88,6 +97,7 @@ export class RuntimeWorkspace {
       const generation = ++this.generation;
       await service.requireTerminal(id); context.signal.throwIfAborted();
       if (closed || generation !== this.generation) throw new AppError("CONFLICT", "Terminal selection changed");
+      const previous = this.attachment?.view.token;
       this.detach();
       const view = service.engine.attach(id, cols, rows,
         (token, output) => {
@@ -96,12 +106,20 @@ export class RuntimeWorkspace {
           emit({ type: "signal", name: "terminal-exit", envelope: { apiVersion: API_VERSION, args: [token] } });
         });
       this.attachment = { owner: peer.connectionId, view };
+      // Drop unsubmitted bytes from the prior attachment for this connection;
+      // admitted bytes already in-flight are not promise-revocable.
+      if (previous) this.inputQueue.cancel(previous);
       return view.token;
     });
     dispatcher.register("detach", ([token]) => {
       if (this.attachment?.owner === peer.connectionId && this.attachment.view.token === token) this.detach();
     });
-    dispatcher.register("input", ([token, data]) => selected(token).input(data));
+    dispatcher.register("input", ([token, data], context) => {
+      selected(token);
+      context.signal.throwIfAborted();
+      return this.inputQueue.enqueue(token, data);
+    });
+    dispatcher.register("cancel-input", ([token]) => ({ dropped: this.inputQueue.cancel(token) }));
     const endpoint: RuntimeEndpoint = {
       dispatch: request => dispatcher.dispatch(request.method, request),
       cancel: id => dispatcher.cancel(id),
@@ -126,11 +144,28 @@ export class RuntimeWorkspace {
     this.peers.set(peer.connectionId, { send: emit, endpoint });
     return endpoint;
   }
-  private detach() { this.attachment?.view.close(); this.attachment = undefined; }
+  private detach() {
+    if (!this.attachment) return;
+    const token = this.attachment.view.token;
+    this.attachment.view.close();
+    this.attachment = undefined;
+    // Drop unsubmitted bytes; admitted in-flight bytes are not promise-revocable.
+    this.inputQueue.cancel(token);
+  }
+  private broadcastInputProgress(snapshot: InputQueueProgress[]) {
+    if (snapshot.length === 0) return;
+    for (const peer of this.peers.values()) {
+      try { peer.send({ type: "signal", name: "terminal-input-progress", envelope: { apiVersion: API_VERSION, args: [snapshot] } }); }
+      catch { /* The transport owns disconnect and admission cleanup. */ }
+    }
+  }
   close() { return this.stopped ??= this.shutdown(); }
   private async shutdown() {
     this.closing = true; this.unsubscribe(); clearTimeout(this.changeTimer);
     this.detach();
+    // Drain admitted input before tearing the engine down — those bytes were
+    // promised to the terminal even if no peer is connected anymore.
+    await this.inputQueue.close();
     // Runtime stop cancels between launch items. Desktop disconnection does not.
     const clients = [...this.peers.values()];
     const results = await Promise.allSettled([this.service.launches.close(), ...clients.map(peer => peer.endpoint.close())]);

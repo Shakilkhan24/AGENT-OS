@@ -55,7 +55,8 @@ export const methods = {
   ]), 125000),
   attach: method(z.tuple([id, columns, rows]), id),
   detach: method(z.tuple([id]), z.void()),
-  input: method(z.tuple([id, z.string().max(65536)]), z.void()),
+  input: method(z.tuple([id, z.string().max(65536)]), z.object({ admitted: z.number().int().min(0).max(65536) }).strict()),
+  "cancel-input": method(z.tuple([id]), z.object({ dropped: z.number().int().min(0).max(8 * 1024 * 1024) }).strict()),
   "startup-recovery": method(z.tuple([]), z.string().nullable()),
 } as const;
 export type Method = keyof typeof methods;
@@ -77,12 +78,18 @@ export interface InvocationContext {
   deadlineAt: number;
 }
 export const signalEnvelopeSchema = z.object({ apiVersion: z.number().int(), args: z.array(z.unknown()).max(3) }).strict();
+export const inputProgressSchema = z.array(z.object({
+  token: z.string().min(1).max(256),
+  queued: z.number().int().min(0).max(8 * 1024 * 1024),
+  delivered: z.number().int().min(0).max(8 * 1024 * 1024),
+})).max(32);
 export const signals = {
   "workspace-changed": z.tuple([]),
   resize: z.tuple([id, columns, rows]),
   acknowledge: z.tuple([id, z.number().int().min(0).max(1024 * 1024)]),
   "terminal-output": z.tuple([id, z.string().max(1024 * 1024)]),
   "terminal-exit": z.tuple([id]),
+  "terminal-input-progress": z.tuple([inputProgressSchema]),
 };
 export function parseSignal<M extends keyof typeof signals>(name: M, value: unknown): z.output<(typeof signals)[M]> {
   checkFrame(value);

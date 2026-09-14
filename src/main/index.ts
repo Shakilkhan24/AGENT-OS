@@ -146,6 +146,15 @@ else {
               fields: { channel, kind: error instanceof Error ? error.name : "unknown" } });
           }
         });
+      // M1.6: explicit user-initiated "stop runtime and quit". Window close and
+      // GUI crash do not invoke this; the runtime keeps running.
+      ipcMain.handle("stop-runtime", (event) => {
+        try { trusted(event); } catch { throw new Error("Untrusted IPC sender"); }
+        if (!runtimeStarted || !runtime) throw new Error("Runtime is not running");
+        stoppingRuntime = true;
+        app.quit();
+        return { accepted: true };
+      });
       window = new BrowserWindow({
         width: 1440,
         height: 920,
@@ -197,25 +206,35 @@ else {
     });
 }
 let shuttingDown = false;
+let stoppingRuntime = false;
 const SHUTDOWN_FLUSH_BUDGET_MS = 5000;
 app.on("window-all-closed", () => app.quit());
+/**
+ * M1.6: "close window" drains pending IPC and acknowledged drafts on the
+ * desktop side, then exits the GUI process. The runtime child is intentionally
+ * left running so tmux work survives across desktop restarts; the next launch
+ * either re-attaches to the existing runtime (per `tryAttachRuntime`) or starts
+ * a fresh one. To terminate the runtime and its durable work the user must
+ * invoke the explicit `stop-runtime` IPC, which sets `stoppingRuntime` so
+ * `flushBeforeQuit` knows to forward SIGTERM.
+ */
 function flushBeforeQuit(event: Electron.Event) {
-  // Flush pending state.json and event-journal writes before the process
-  // exits. The runtime drains its own state through SIGTERM; the desktop
-  // only closes the authenticated socket and signals the child. The watchdog
-  // caps the wait — see src/main/shutdown.ts.
   if (runtimeStarted) {
     event.preventDefault();
     if (shuttingDown) return;
     shuttingDown = true;
     detach();
+    log({ level: "info", source: "application", event: "desktop-shutdown",
+      fields: { mode: stoppingRuntime ? "stop-runtime" : "window-closed" } });
     const watchdog = runWithWatchdog(async () => {
       const pending = await Promise.allSettled([client!.dispatch({
         apiVersion: API_VERSION, id: crypto.randomUUID(), correlationId: crypto.randomUUID(),
         deadlineAt: Date.now() + 1000, method: "snapshot", args: [],
       }).catch(() => null), protocol.close(), ...pendingRequests]);
       client!.close();
-      await runtime!.stop("SIGTERM", SHUTDOWN_FLUSH_BUDGET_MS);
+      // Only the explicit "stop runtime" path signals the child. A window close
+      // (or a desktop crash) leaves the OS-locked runtime serving this profile.
+      if (stoppingRuntime) await runtime!.stop("SIGTERM", SHUTDOWN_FLUSH_BUDGET_MS);
       const failure = pending.find(result => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
     }, {
@@ -225,6 +244,7 @@ function flushBeforeQuit(event: Electron.Event) {
     watchdog.done.then(outcome => app.exit(outcome === "completed" ? 0 : 1));
   }
 }
+
 app.on("before-quit", event => {
   quitRequested = true;
   // Chromium can block window closure during navigation. Drain directly in

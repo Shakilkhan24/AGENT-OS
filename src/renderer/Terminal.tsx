@@ -3,7 +3,7 @@ import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalView } from "../shared/types";
-import { TerminalInputQueue, utf8Bytes } from "../shared/terminal-flow";
+import { utf8Bytes } from "../shared/terminal-flow";
 export function Terminal({
   terminal,
   report,
@@ -23,7 +23,6 @@ export function Terminal({
     let pending: [string, string][] = [];
     const earlyExits = new Set<string>();
     let receivedOutput = false;
-    const input = new TerminalInputQueue(data => window.minimal.input(token, data));
     const term = new Xterm({
       cursorBlink: true,
       fontFamily: '"DejaVu Sans Mono", "Cascadia Code", monospace',
@@ -92,10 +91,12 @@ export function Terminal({
     });
     const onData = term.onData((data) => {
       if (!token || disposed) return;
-      void input.enqueue(data)
-        .catch((error) => {
-          if (!disposed) report(error);
-        });
+      // The runtime owns the queue and its progress signal; the renderer just
+      // forwards bytes. Admission failures are surfaced by `report` so the
+      // user can see why their paste was rejected.
+      window.minimal.input(token, data).catch((error) => {
+        if (!disposed) report(error);
+      });
     });
     const copy = () =>
       window.minimal.writeClipboard(term.getSelection()).catch(report);
@@ -173,7 +174,6 @@ export function Terminal({
     element.addEventListener("contextmenu", onContextMenu);
     return () => {
       disposed = true;
-      input.cancel();
       setConnected(false);
       observer.disconnect();
       cancelAnimationFrame(resizeFrame);
