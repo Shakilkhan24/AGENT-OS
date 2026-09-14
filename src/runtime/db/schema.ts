@@ -253,6 +253,7 @@ export const tableSpecs: readonly TableSpec[] = [
       account_mode TEXT NOT NULL DEFAULT 'anonymous',
       started_at TEXT,
       ended_at TEXT,
+      ended_reason TEXT,
       created_at TEXT NOT NULL
     )`,
     indices: [
@@ -272,6 +273,7 @@ export const tableSpecs: readonly TableSpec[] = [
       scope_json TEXT NOT NULL DEFAULT '{}',
       deadline_at TEXT NOT NULL,
       state TEXT NOT NULL DEFAULT 'recorded',
+      claimed_at TEXT,
       created_at TEXT NOT NULL
     )`,
     indices: [

@@ -184,11 +184,11 @@ test("transitionInvocation enforces the state machine", async () => {
       runId: run.id, idempotencyKey: "k1", canonicalDigest: "a".repeat(64),
       providerVersion: "v1", model: "m1", accountMode: "authenticated",
     });
-    await transitionInvocation(worker, inv.id, "admitted");
-    await transitionInvocation(worker, inv.id, "spawned");
-    await transitionInvocation(worker, inv.id, "observing");
-    await transitionInvocation(worker, inv.id, "done");
-    await assert.rejects(transitionInvocation(worker, inv.id, "admitted"), (error: unknown) =>
+    await transitionInvocation(worker, inv.id, { to: "admitted" });
+    await transitionInvocation(worker, inv.id, { to: "spawned" });
+    await transitionInvocation(worker, inv.id, { to: "observing" });
+    await transitionInvocation(worker, inv.id, { to: "done" });
+    await assert.rejects(transitionInvocation(worker, inv.id, { to: "admitted" }), (error: unknown) =>
       error instanceof AppError && error.failure.code === "CONFLICT");
     const list = await listInvocationsForRun(worker, run.id);
     assert.equal(list.length, 1);

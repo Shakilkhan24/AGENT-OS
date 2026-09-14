@@ -86,7 +86,11 @@ export async function transitionDispatchIntent(worker: DbWorker, id: string, to:
     const from = dispatchIntentStateSchema.parse(String((row as Record<string, unknown>).state));
     if (!INTENT_TRANSITIONS[from].includes(to))
       throw new AppError("CONFLICT", `Illegal dispatch_intent transition ${from} → ${to}`);
-    driver.prepare("UPDATE dispatch_intent SET state = ? WHERE uuid = ?").run(to, id);
+    const updates: string[] = ["state = ?"];
+    const values: unknown[] = [to];
+    if (to === "claimed") { updates.push("claimed_at = ?"); values.push(new Date().toISOString()); }
+    values.push(id);
+    driver.prepare(`UPDATE dispatch_intent SET ${updates.join(", ")} WHERE uuid = ?`).run(...values);
   });
   const after = await readDispatchIntent(worker, id);
   if (!after) throw new AppError("UNAVAILABLE", "DispatchIntent disappeared after transition");

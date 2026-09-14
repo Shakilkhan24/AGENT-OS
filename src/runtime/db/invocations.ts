@@ -100,20 +100,30 @@ export async function listInvocationsForRun(worker: DbWorker, runId: string): Pr
   return rows.map(parseInvocationRow);
 }
 
-export async function transitionInvocation(worker: DbWorker, id: string, to: InvocationStatus): Promise<Invocation> {
+const TRANSITION_INPUT = z.object({
+  to: invocationStatusSchema,
+  reason: z.string().min(1).max(256).optional(),
+}).strict();
+export type InvocationTransitionInput = z.input<typeof TRANSITION_INPUT>;
+
+export async function transitionInvocation(worker: DbWorker, id: string, input: InvocationTransitionInput): Promise<Invocation> {
+  const parsed = TRANSITION_INPUT.parse(input);
   const driver = driverOf(worker);
   await worker.transaction(tx => {
     void tx;
     const row = driver.prepare("SELECT status FROM invocation WHERE uuid = ?").first(id);
     if (!row) throw new AppError("NOT_FOUND", "Invocation not found");
     const from = invocationStatusSchema.parse(String((row as Record<string, unknown>).status));
-    if (!INVOCATION_TRANSITIONS[from].includes(to))
-      throw new AppError("CONFLICT", `Illegal invocation transition ${from} → ${to}`);
+    if (!INVOCATION_TRANSITIONS[from].includes(parsed.to))
+      throw new AppError("CONFLICT", `Illegal invocation transition ${from} → ${parsed.to}`);
     const now = new Date().toISOString();
     const updates: string[] = ["status = ?"];
-    const values: unknown[] = [to];
-    if (to === "admitted") { updates.push("started_at = ?"); values.push(now); }
-    if (to === "done" || to === "error") { updates.push("ended_at = ?"); values.push(now); }
+    const values: unknown[] = [parsed.to];
+    if (parsed.to === "admitted") { updates.push("started_at = ?"); values.push(now); }
+    if (parsed.to === "done" || parsed.to === "error") {
+      updates.push("ended_at = ?"); values.push(now);
+      if (parsed.reason !== undefined) { updates.push("ended_reason = ?"); values.push(parsed.reason); }
+    }
     values.push(id);
     driver.prepare(`UPDATE invocation SET ${updates.join(", ")} WHERE uuid = ?`).run(...values);
   });
@@ -136,6 +146,7 @@ function parseInvocationRow(row: Record<string, unknown>): Invocation {
     accountMode: String(row.account_mode ?? "anonymous"),
     startedAt: row.started_at == null ? null : String(row.started_at),
     endedAt: row.ended_at == null ? null : String(row.ended_at),
+    endedReason: row.ended_reason == null ? null : String(row.ended_reason),
     createdAt: String(row.created_at),
   });
   return { ...parsed, id: parsed.uuid };

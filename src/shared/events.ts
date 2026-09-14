@@ -79,6 +79,32 @@ export const domainEventSchema = z.discriminatedUnion("type", [
       eventSeq: z.number().int().nonnegative(),
     }),
   }),
+  base.extend({
+    type: z.literal("provider.observation"),
+    data: z.object({
+      invocationId: z.string().uuid(),
+      startup: z.record(z.string().max(64), z.unknown()),
+      exit: z.object({
+        at: z.string().datetime(),
+        code: z.number().int().nullable(),
+        signal: z.string().nullable(),
+        reason: z.string().min(1).max(256).nullable(),
+      }).strict(),
+      usage: z.object({
+        inputTokens: z.number().int().min(0).nullable(),
+        outputTokens: z.number().int().min(0).nullable(),
+        cacheReadTokens: z.number().int().min(0).nullable(),
+        cacheWriteTokens: z.number().int().min(0).nullable(),
+      }).strict().nullable(),
+    }).strict(),
+  }),
+  base.extend({
+    type: z.literal("dispatch.ambiguous"),
+    data: z.object({
+      invocationId: z.string().uuid(),
+      reason: z.string().min(1).max(256),
+    }).strict(),
+  }),
 ]);
 export type DomainEvent = z.infer<typeof domainEventSchema>;
 type Input<T> = T extends unknown

@@ -166,6 +166,7 @@ export const invocationSchema = z.object({
   accountMode: z.enum(["anonymous", "authenticated", "trusted-host"]),
   startedAt: timestampSchema.nullable(),
   endedAt: timestampSchema.nullable(),
+  endedReason: z.string().min(1).max(256).nullable().default(null),
   createdAt: timestampSchema,
 }).strict();
 export type Invocation = z.infer<typeof invocationSchema>;
