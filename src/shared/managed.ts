@@ -58,7 +58,61 @@ export type ProviderIdentity = z.infer<typeof providerIdentitySchema>;
 export const taskStatusSchema = z.enum(["draft", "ready", "active", "done", "abandoned"]);
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 
-/** Public shape of a task — no DB columns leaked. */
+// ── Lease ────────────────────────────────────────────────────────────────────
+
+export const leaseStateSchema = z.enum(["held", "released", "uncertain", "expired"]);
+export type LeaseState = z.infer<typeof leaseStateSchema>;
+
+/**
+ * A managed write lease. A lease pins a workspace to a single writer (a
+ * controller process) for a bounded window so two writers cannot edit the
+ * same checkout concurrently. The lease service is the only authority
+ * that releases a held lease; a crashed controller leaves the lease
+ * `held` until a `markUncertain` call surfaces the unknown state.
+ */
+export const leaseSchema = z.object({
+  id: idSchema,
+  workspaceId: idSchema,
+  holder: z.string().min(1).max(256),
+  state: leaseStateSchema,
+  acquiredAt: timestampSchema,
+  expiresAt: timestampSchema,
+  renewedAt: timestampSchema.nullable(),
+  releasedAt: timestampSchema.nullable(),
+  fencingToken: z.number().int().min(0),
+}).strict();
+export type Lease = z.infer<typeof leaseSchema>;
+
+// ── ContextReceipt ───────────────────────────────────────────────────────────
+
+export const receiptStatusSchema = z.enum(["draft", "assembled", "submitted", "confirmed", "rejected"]);
+export type ReceiptStatus = z.infer<typeof receiptStatusSchema>;
+
+/**
+ * A bounded context receipt for one managed run. It records the
+ * objective, the selected revisions/hashes, the provider identity, the
+ * environment and capabilities, and explicit exclusions. The status
+ * state machine moves draft → assembled → submitted → confirmed | rejected.
+ */
+export const contextReceiptSchema = z.object({
+  id: idSchema,
+  runId: idSchema,
+  status: receiptStatusSchema,
+  objective: z.string().max(8000),
+  constraintsJson: z.string().max(64 * 1024),
+  acceptanceChecksJson: z.string().max(64 * 1024),
+  selectedRevisionsJson: z.string().max(64 * 1024),
+  instructionsJson: z.string().max(64 * 1024),
+  environmentJson: z.string().max(64 * 1024),
+  capabilitiesJson: z.string().max(64 * 1024),
+  exclusionsJson: z.string().max(64 * 1024),
+  digestsJson: z.string().max(64 * 1024),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+}).strict();
+export type ContextReceipt = z.infer<typeof contextReceiptSchema>;
+
+// ── Task ─────────────────────────────────────────────────────────────────────
 export const taskSchema = z.object({
   id: idSchema,
   title: z.string().trim().min(1).max(200),

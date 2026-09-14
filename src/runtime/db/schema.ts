@@ -21,9 +21,11 @@ import { draftSummarySchema } from "../../shared/drafts";
 import {
   artifactReferenceSchema,
   attentionItemSchema,
+  contextReceiptSchema,
   dispatchIntentSchema,
   grantSchema,
   invocationSchema,
+  leaseSchema,
   runSchema,
   taskSchema,
   workspaceSchema,
@@ -356,6 +358,51 @@ export const tableSpecs: readonly TableSpec[] = [
       "CREATE UNIQUE INDEX attention_issue_idx ON attention_item(issue_identity, revision)",
     ],
   },
+  {
+    name: "lease",
+    ddl: `CREATE TABLE lease (
+      ${rowId},
+      ${uuidColumn},
+      workspace_id TEXT NOT NULL REFERENCES workspace(uuid) ON DELETE CASCADE,
+      holder TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'held',
+      acquired_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      renewed_at TEXT,
+      released_at TEXT,
+      fencing_token INTEGER NOT NULL DEFAULT 0
+    )`,
+    indices: [
+      "CREATE INDEX lease_workspace_idx ON lease(workspace_id)",
+      "CREATE INDEX lease_state_idx ON lease(state)",
+      "CREATE UNIQUE INDEX lease_active_idx ON lease(workspace_id) WHERE state = 'held'",
+    ],
+  },
+  {
+    name: "context_receipt",
+    ddl: `CREATE TABLE context_receipt (
+      ${rowId},
+      ${uuidColumn},
+      run_id TEXT NOT NULL REFERENCES run(uuid) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'draft',
+      objective TEXT NOT NULL DEFAULT '',
+      constraints_json TEXT NOT NULL DEFAULT '{}',
+      acceptance_checks_json TEXT NOT NULL DEFAULT '{}',
+      selected_revisions_json TEXT NOT NULL DEFAULT '{}',
+      instructions_json TEXT NOT NULL DEFAULT '{}',
+      environment_json TEXT NOT NULL DEFAULT '{}',
+      capabilities_json TEXT NOT NULL DEFAULT '{}',
+      exclusions_json TEXT NOT NULL DEFAULT '{}',
+      digests_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX receipt_run_idx ON context_receipt(run_id)",
+      "CREATE INDEX receipt_status_idx ON context_receipt(status)",
+      "CREATE UNIQUE INDEX receipt_run_active_idx ON context_receipt(run_id) WHERE status IN ('draft','assembled','submitted','confirmed')",
+    ],
+  },
 ];
 
 export const terminalRowSchema = z.object({
@@ -408,3 +455,5 @@ export const workspaceRowSchema = workspaceSchema.extend({ uuid: z.string().uuid
 export const grantRowSchema = grantSchema.extend({ uuid: z.string().uuid() });
 export const artifactReferenceRowSchema = artifactReferenceSchema.extend({ uuid: z.string().uuid() });
 export const attentionItemRowSchema = attentionItemSchema.extend({ uuid: z.string().uuid() });
+export const leaseRowSchema = leaseSchema.extend({ uuid: z.string().uuid() });
+export const contextReceiptRowSchema = contextReceiptSchema.extend({ uuid: z.string().uuid() });
