@@ -18,6 +18,16 @@ import { hookSchema } from "../../shared/hooks";
 import { launchRecordSchema } from "../../shared/models";
 import { domainEventSchema } from "../../shared/events";
 import { draftSummarySchema } from "../../shared/drafts";
+import {
+  artifactReferenceSchema,
+  attentionItemSchema,
+  dispatchIntentSchema,
+  grantSchema,
+  invocationSchema,
+  runSchema,
+  taskSchema,
+  workspaceSchema,
+} from "../../shared/managed";
 
 /** SQLite's `INTEGER PRIMARY KEY` rowid column. */
 const rowId = "id INTEGER PRIMARY KEY AUTOINCREMENT";
@@ -183,6 +193,169 @@ export const tableSpecs: readonly TableSpec[] = [
     )`,
     indices: [],
   },
+  {
+    name: "task",
+    ddl: `CREATE TABLE task (
+      ${rowId},
+      ${uuidColumn},
+      title TEXT NOT NULL,
+      objective TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft',
+      project_id TEXT NOT NULL DEFAULT '',
+      provider_version TEXT,
+      model TEXT,
+      account_mode TEXT,
+      host_id TEXT NOT NULL DEFAULT '',
+      base_identity TEXT,
+      root_identity TEXT,
+      effective_inputs_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX task_status_idx ON task(status)",
+      "CREATE INDEX task_project_idx ON task(project_id)",
+    ],
+  },
+  {
+    name: "run",
+    ddl: `CREATE TABLE run (
+      ${rowId},
+      ${uuidColumn},
+      task_id TEXT NOT NULL REFERENCES task(uuid) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'queued',
+      started_at TEXT,
+      ended_at TEXT,
+      base_revision TEXT,
+      terminal_uuid TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX run_task_idx ON run(task_id)",
+      "CREATE INDEX run_status_idx ON run(status)",
+    ],
+  },
+  {
+    name: "invocation",
+    ddl: `CREATE TABLE invocation (
+      ${rowId},
+      ${uuidColumn},
+      run_id TEXT NOT NULL REFERENCES run(uuid) ON DELETE CASCADE,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'pending',
+      idempotency_key TEXT NOT NULL,
+      canonical_digest TEXT NOT NULL,
+      provider_version TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      account_mode TEXT NOT NULL DEFAULT 'anonymous',
+      started_at TEXT,
+      ended_at TEXT,
+      created_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX invocation_run_idx ON invocation(run_id)",
+      "CREATE UNIQUE INDEX invocation_idem_idx ON invocation(run_id, idempotency_key)",
+    ],
+  },
+  {
+    name: "dispatch_intent",
+    ddl: `CREATE TABLE dispatch_intent (
+      ${rowId},
+      ${uuidColumn},
+      run_id TEXT NOT NULL REFERENCES run(uuid) ON DELETE CASCADE,
+      invocation_id TEXT,
+      method TEXT NOT NULL,
+      args_json TEXT NOT NULL DEFAULT '{}',
+      scope_json TEXT NOT NULL DEFAULT '{}',
+      deadline_at TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'recorded',
+      created_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX dispatch_intent_run_idx ON dispatch_intent(run_id)",
+      "CREATE INDEX dispatch_intent_state_idx ON dispatch_intent(state)",
+    ],
+  },
+  {
+    name: "workspace",
+    ddl: `CREATE TABLE workspace (
+      ${rowId},
+      ${uuidColumn},
+      task_id TEXT NOT NULL REFERENCES task(uuid) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'snapshot',
+      location TEXT NOT NULL,
+      base_identity TEXT,
+      worktree_path TEXT,
+      head_revision TEXT,
+      lease_id TEXT,
+      created_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX workspace_task_idx ON workspace(task_id)",
+    ],
+  },
+  {
+    name: "grant",
+    ddl: `CREATE TABLE grant (
+      ${rowId},
+      ${uuidColumn},
+      task_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'authority',
+      scope_json TEXT NOT NULL DEFAULT '{}',
+      principal TEXT NOT NULL DEFAULT '',
+      digests_json TEXT NOT NULL DEFAULT '{}',
+      state TEXT NOT NULL DEFAULT 'pending',
+      requested_at TEXT NOT NULL,
+      decided_at TEXT,
+      decided_by TEXT
+    )`,
+    indices: [
+      "CREATE INDEX grant_task_idx ON grant(task_id)",
+      "CREATE INDEX grant_state_idx ON grant(state)",
+    ],
+  },
+  {
+    name: "artifact_reference",
+    ddl: `CREATE TABLE artifact_reference (
+      ${rowId},
+      ${uuidColumn},
+      task_id TEXT,
+      run_id TEXT,
+      uri TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'context',
+      bytes INTEGER NOT NULL DEFAULT 0,
+      mime TEXT NOT NULL DEFAULT '',
+      imported_at TEXT NOT NULL,
+      expires_at TEXT
+    )`,
+    indices: [
+      "CREATE INDEX artifact_task_idx ON artifact_reference(task_id)",
+      "CREATE INDEX artifact_run_idx ON artifact_reference(run_id)",
+      "CREATE UNIQUE INDEX artifact_uri_sha_idx ON artifact_reference(uri, sha256)",
+    ],
+  },
+  {
+    name: "attention_item",
+    ddl: `CREATE TABLE attention_item (
+      ${rowId},
+      ${uuidColumn},
+      task_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'decision',
+      issue_identity TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'new',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX attention_kind_idx ON attention_item(kind)",
+      "CREATE INDEX attention_state_idx ON attention_item(state)",
+      "CREATE UNIQUE INDEX attention_issue_idx ON attention_item(issue_identity, revision)",
+    ],
+  },
 ];
 
 export const terminalRowSchema = z.object({
@@ -224,3 +397,14 @@ export const hookRowSchema = hookSchema.extend({ uuid: z.string().uuid() });
 export const launchRowSchema = launchRecordSchema.extend({ uuid: z.string().uuid(), session_uuid: z.string().uuid() });
 export const eventRowSchema = domainEventSchema;
 export const draftRowSchema = draftSummarySchema.extend({ revision: z.number().int().min(1) });
+
+// M3a — managed-work row schemas. Each wraps the shared schema with the DB
+// row's id (UUID) and the column → property renames the driver returns.
+export const taskRowSchema = taskSchema.extend({ uuid: z.string().uuid() });
+export const runRowSchema = runSchema.extend({ uuid: z.string().uuid() });
+export const invocationRowSchema = invocationSchema.extend({ uuid: z.string().uuid() });
+export const dispatchIntentRowSchema = dispatchIntentSchema.extend({ uuid: z.string().uuid() });
+export const workspaceRowSchema = workspaceSchema.extend({ uuid: z.string().uuid() });
+export const grantRowSchema = grantSchema.extend({ uuid: z.string().uuid() });
+export const artifactReferenceRowSchema = artifactReferenceSchema.extend({ uuid: z.string().uuid() });
+export const attentionItemRowSchema = attentionItemSchema.extend({ uuid: z.string().uuid() });

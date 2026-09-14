@@ -16,6 +16,7 @@ import type { Bindings, Database, Row, Statement, Transaction, Value } from "./t
 
 const SQL_KEYWORD_TABLE = /^\s*create\s+table\s+([a-z_][a-z0-9_]*)\s*\(([\s\S]+)\)\s*$/i;
 const SQL_KEYWORD_INSERT = /^\s*insert(?:\s+or\s+replace)?\s+into\s+([a-z_][a-z0-9_]*)\s*\(([^)]+)\)\s*values\s*\(([^)]+)\)\s*$/i;
+const SQL_KEYWORD_UNIQUE_INDEX = /^\s*create\s+unique\s+index\s+\S+\s+on\s+([a-z_][a-z0-9_]*)\s*\(([^)]+)\)\s*(?:where\s+\S+\s+is\s+not\s+null)?\s*$/i;
 
 interface ColumnSpec { name: string; primaryKey: boolean; notNull: boolean; unique: boolean; references?: { table: string; column: string } }
 
@@ -34,8 +35,21 @@ function parseColumns(spec: string): ColumnSpec[] {
   });
 }
 
+/** Parse `col1, col2, ...` into the column names. */
+function parseColumnList(spec: string): string[] {
+  return spec.split(",").map(part => part.trim()).filter(Boolean);
+}
+
+/** Remove the just-inserted row so a constraint violation leaves the table in its pre-insert state. */
+function rollbackInsertedRow(table: MemoryTable, row: Row): void {
+  const index = table.rows.lastIndexOf(row);
+  if (index >= 0) table.rows.splice(index, 1);
+}
+
 class MemoryTable {
   rows: Row[] = [];
+  /** Composite unique constraints parsed from `CREATE UNIQUE INDEX` statements. */
+  uniqueIndexColumns: string[][] = [];
   constructor(readonly name: string, readonly columns: ColumnSpec[]) {}
   /** Returns the unique index (column name) for the implicit PK, or `undefined`. */
   primaryKey(): string | undefined { return this.columns.find(column => column.primaryKey)?.name; }
@@ -109,6 +123,11 @@ export class MemoryDatabase implements Database {
       return new MemoryStatement(this, sql, "table");
     }
     if (/^\s*create\s+(unique\s+)?index\s+/i.test(trimmed)) {
+      const uniqueMatch = trimmed.match(SQL_KEYWORD_UNIQUE_INDEX);
+      if (uniqueMatch) {
+        const target = this.tables.get(uniqueMatch[1]);
+        if (target) target.uniqueIndexColumns.push(parseColumnList(uniqueMatch[2]));
+      }
       return new MemoryStatement(this, sql, "index");
     }
     if (/^\s*pragma\s+/i.test(trimmed)) {
@@ -231,13 +250,29 @@ export class MemoryDatabase implements Database {
     } else {
       table.rows.push(row);
     }
+    // Single-column UNIQUE (declared in the CREATE TABLE body). Skip the
+    // row we just inserted; otherwise it counts as its own duplicate and
+    // even a fresh row violates the constraint.
     for (const column of table.uniqueColumns()) {
-      if (table.rows.filter(existing => existing[column] === row[column]).length > 1) {
-        // Roll back the inserted row before throwing so subsequent statements in
-        // the same transaction observe a clean state.
-        const index = table.rows.lastIndexOf(row);
-        if (index >= 0) table.rows.splice(index, 1);
+      const dupCount = table.rows.reduce((count, existing) =>
+        existing !== row && existing[column] === row[column] ? count + 1 : count, 0);
+      if (dupCount > 0) {
+        rollbackInsertedRow(table, row);
         throw new Error(`UNIQUE constraint failed: ${table.name}.${column}`);
+      }
+    }
+    // Composite UNIQUE (declared as a separate CREATE UNIQUE INDEX statement).
+    // Each constraint matches a tuple of columns; rows that hold an identical
+    // tuple violate the constraint. Check against rows OTHER than the one we
+    // just pushed so the freshly-inserted row never counts as its own duplicate.
+    const others = table.rows.filter(existing => existing !== row);
+    for (const columns of table.uniqueIndexColumns) {
+      const duplicate = others.some(existing =>
+        columns.every(column => existing[column] === row[column]),
+      );
+      if (duplicate) {
+        rollbackInsertedRow(table, row);
+        throw new Error(`UNIQUE constraint failed: ${table.name}.${columns.join(",")}`);
       }
     }
   }
@@ -270,7 +305,10 @@ export class MemoryDatabase implements Database {
     if (!match) throw new Error(`Unsupported delete: ${sql}`);
     const table = this.tables.get(match[1]);
     if (!table) throw new Error(`Unknown table: ${match[1]}`);
-    const predicate = match[2] ? this.parsePredicate(match[2], bindings) : () => true;
+    let placeholderIndex = 0;
+    const predicate = match[2]
+      ? this.parsePredicate(match[2], bindings, () => placeholderIndex++)
+      : () => true;
     const before = table.rows.length;
     table.rows = table.rows.filter(row => !predicate(row));
     const removed = before - table.rows.length;
@@ -284,7 +322,13 @@ export class MemoryDatabase implements Database {
     const table = this.tables.get(match[2]);
     if (!table) throw new Error(`Unknown table: ${match[2]}`);
     const projection = match[1].trim();
-    const predicate = match[3] ? this.parsePredicate(match[3], bindings) : () => true;
+    // Each `?` in the WHERE clause advances the placeholder counter so a
+    // multi-clause predicate resolves to the correct binding instead of
+    // every placeholder reading the first binding.
+    let placeholderIndex = 0;
+    const predicate = match[3]
+      ? this.parsePredicate(match[3], bindings, () => placeholderIndex++)
+      : () => true;
     const orderBy = match[4]?.trim();
     const limit = match[5] ? Number(match[5]) : undefined;
     let rows = table.rows.filter(predicate);
