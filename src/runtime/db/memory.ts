@@ -16,7 +16,7 @@ import type { Bindings, Database, Row, Statement, Transaction, Value } from "./t
 
 const SQL_KEYWORD_TABLE = /^\s*create\s+table\s+([a-z_][a-z0-9_]*)\s*\(([\s\S]+)\)\s*$/i;
 const SQL_KEYWORD_INSERT = /^\s*insert(?:\s+or\s+replace)?\s+into\s+([a-z_][a-z0-9_]*)\s*\(([^)]+)\)\s*values\s*\(([^)]+)\)\s*$/i;
-const SQL_KEYWORD_UNIQUE_INDEX = /^\s*create\s+unique\s+index\s+\S+\s+on\s+([a-z_][a-z0-9_]*)\s*\(([^)]+)\)\s*(?:where\s+\S+\s+is\s+not\s+null)?\s*$/i;
+const SQL_KEYWORD_UNIQUE_INDEX = /^\s*create\s+unique\s+index\s+\S+\s+on\s+([a-z_][a-z0-9_]*)\s*\(([^)]+)\)\s*(?:where\s+(.+?))?\s*$/i;
 
 interface ColumnSpec { name: string; primaryKey: boolean; notNull: boolean; unique: boolean; references?: { table: string; column: string } }
 
@@ -370,20 +370,28 @@ export class MemoryDatabase implements Database {
   }
 
   private parsePredicate(spec: string, bindings: Bindings, nextIndex: () => number = () => 0): (row: Row) => boolean {
+    // Split top-level AND conjuncts first; each conjunct may itself be a
+    // disjunction ("a = ? OR b = ?") — we evaluate those as OR within a
+    // single AND clause. This mirrors SQL's precedence (AND binds
+    // tighter than OR) and is enough for the queries the runtime issues.
     const conjuncts = spec.split(/\s+and\s+/i);
     const clauses = conjuncts.map(part => {
-      const match = part.match(/^\s*([a-z_][a-z0-9_]*)\s*(=|is|!=)\s*(\?+|\d+|null|true|false|'[^']*')\s*$/i);
-      if (!match) throw new Error(`Unsupported predicate: ${part}`);
-      const column = match[1];
-      const operator = match[2].toLowerCase();
-      const raw = match[3];
-      const value = this.parseLiteralOrPlaceholder(raw);
-      if (value && typeof value === "object" && "param" in value) {
-        (value as { param: number }).param = nextIndex();
-      }
-      const resolved = (_row: Row) => this.resolveValue(value, bindings);
-      if (operator === "=" || operator === "is") return (row: Row) => resolved(row) === row[column];
-      return (row: Row) => resolved(row) !== row[column];
+      const disjuncts = part.split(/\s+or\s+/i);
+      const atoms = disjuncts.map(sub => {
+        const match = sub.match(/^\s*\(?\s*([a-z_][a-z0-9_]*)\s*(=|is|!=)\s*(\?+|\d+|null|true|false|'[^']*')\s*\)?\s*$/i);
+        if (!match) throw new Error(`Unsupported predicate: ${sub}`);
+        const column = match[1];
+        const operator = match[2].toLowerCase();
+        const raw = match[3];
+        const value = this.parseLiteralOrPlaceholder(raw);
+        if (value && typeof value === "object" && "param" in value) {
+          (value as { param: number }).param = nextIndex();
+        }
+        const resolved = (_row: Row) => this.resolveValue(value, bindings);
+        if (operator === "=" || operator === "is") return (row: Row) => resolved(row) === row[column];
+        return (row: Row) => resolved(row) !== row[column];
+      });
+      return (row: Row) => atoms.some(atom => atom(row));
     });
     return row => clauses.every(clause => clause(row));
   }

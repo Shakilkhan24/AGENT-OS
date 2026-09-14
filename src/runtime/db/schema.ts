@@ -375,7 +375,6 @@ export const tableSpecs: readonly TableSpec[] = [
     indices: [
       "CREATE INDEX lease_workspace_idx ON lease(workspace_id)",
       "CREATE INDEX lease_state_idx ON lease(state)",
-      "CREATE UNIQUE INDEX lease_active_idx ON lease(workspace_id) WHERE state = 'held'",
     ],
   },
   {
@@ -400,7 +399,7 @@ export const tableSpecs: readonly TableSpec[] = [
     indices: [
       "CREATE INDEX receipt_run_idx ON context_receipt(run_id)",
       "CREATE INDEX receipt_status_idx ON context_receipt(status)",
-      "CREATE UNIQUE INDEX receipt_run_active_idx ON context_receipt(run_id) WHERE status IN ('draft','assembled','submitted','confirmed')",
+      "CREATE UNIQUE INDEX receipt_run_idx ON context_receipt(run_id)",
     ],
   },
 ];
