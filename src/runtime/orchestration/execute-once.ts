@@ -50,6 +50,7 @@ import {
   type SpawnRequest,
 } from "../providers/adapter";
 import { markAmbiguous } from "./uncertain";
+import { isStopped } from "./stop-policy";
 
 const EXECUTE_ONCE_INPUT = z.object({
   runId: z.string().uuid(),
@@ -115,6 +116,14 @@ export async function executeOnce(
   input: ExecuteOnceInput,
 ): Promise<ExecuteOnceResult> {
   const parsed = EXECUTE_ONCE_INPUT.parse(input);
+  // Per-run stop gate. If the run has been cancelled, future
+  // `executeOnce` calls refuse to spawn a new adapter; the caller
+  // surfaces the unconfirmed descendants in the run summary.
+  if (isStopped(parsed.runId))
+    return {
+      kind: "conflict",
+      reason: `Run ${parsed.runId} is stopped; executeOnce is blocked`,
+    };
   // Resolve the adapter eagerly so all return paths share the same instance
   // (the registry may be a process-wide singleton in production; the test
   // seam swaps the resolver explicitly).

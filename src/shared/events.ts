@@ -105,6 +105,22 @@ export const domainEventSchema = z.discriminatedUnion("type", [
       reason: z.string().min(1).max(256),
     }).strict(),
   }),
+  base.extend({
+    type: z.literal("stop.requested"),
+    data: z.object({
+      runId: z.string().uuid(),
+      reason: z.string().min(1).max(256),
+      requestedBy: z.string().min(1).max(256),
+    }).strict(),
+  }),
+  base.extend({
+    type: z.literal("cursor.committed"),
+    data: z.object({
+      invocationId: z.string().uuid(),
+      observationSeq: z.number().int().nonnegative(),
+      outcome: z.enum(["done", "error", "uncertain"]),
+    }).strict(),
+  }),
 ]);
 export type DomainEvent = z.infer<typeof domainEventSchema>;
 type Input<T> = T extends unknown
