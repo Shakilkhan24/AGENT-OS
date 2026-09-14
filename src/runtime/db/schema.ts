@@ -100,7 +100,6 @@ export const tableSpecs: readonly TableSpec[] = [
       ${rowId},
       ${uuidColumn},
       name TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
       variables_json TEXT NOT NULL DEFAULT '{}'
     )`,
     indices: ["CREATE INDEX env_profile_uuid_idx ON env_profile(uuid)"],
@@ -112,7 +111,10 @@ export const tableSpecs: readonly TableSpec[] = [
       ${uuidColumn},
       name TEXT NOT NULL,
       event TEXT NOT NULL,
-      command TEXT NOT NULL,
+      action_json TEXT NOT NULL,
+      session_uuid TEXT,
+      terminal_uuid TEXT,
+      match TEXT,
       enabled INTEGER NOT NULL DEFAULT 1
     )`,
     indices: ["CREATE INDEX hook_uuid_idx ON hook(uuid)"],

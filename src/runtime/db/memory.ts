@@ -210,7 +210,10 @@ export class MemoryDatabase implements Database {
     this.applyRowInsert(table, row);
     if (write) {
       const pk = table.primaryKey();
-      if (pk) this.lastRowid = this.toRowid(row[pk] as Value);
+      if (pk) {
+        const value = row[pk] as Value;
+        if (typeof value === "number" || typeof value === "bigint") this.lastRowid = typeof value === "bigint" ? Number(value) : value;
+      }
       this.lastChanges = 1;
     }
     return write ? 1 : [];
@@ -237,12 +240,6 @@ export class MemoryDatabase implements Database {
         throw new Error(`UNIQUE constraint failed: ${table.name}.${column}`);
       }
     }
-  }
-
-  private toRowid(value: Value): number {
-    if (typeof value === "number") return value;
-    if (typeof value === "bigint") return Number(value);
-    throw new Error("rowid must be numeric");
   }
 
   private executeUpdate(sql: string, bindings: Bindings, write: boolean): Row[] | number {
