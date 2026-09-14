@@ -85,3 +85,20 @@ test("managed review toggle persists across reload", async () => {
     await expect(page.getByText("Sessions", { exact: true })).toBeVisible();
   } finally { await ctx.close(); }
 });
+
+test("managed review unavailable path does not render the Approve button or the Review actions", async () => {
+  // The M3c.2 panels live inside TaskDetail which only renders when
+  // `managed.available === true` and a task is selected. On a fresh
+  // profile with no M3 entities, the projection envelope arrives as
+  // `{available: false}`; the buttons must not appear because there is
+  // no task to approve and no review to act on.
+  const ctx = await fixture();
+  const { page } = ctx;
+  try {
+    await page.getByRole("button", { name: /Show managed review/ }).click();
+    await expect(page.getByRole("heading", { name: "Review shell unavailable on this profile." })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Approve and run verifier/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Accept review/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Reject review/ })).toHaveCount(0);
+  } finally { await ctx.close(); }
+});

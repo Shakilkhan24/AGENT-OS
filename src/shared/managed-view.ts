@@ -15,9 +15,11 @@ import { z } from "zod";
 import { taskSchema, runSchema, invocationSchema, dispatchIntentSchema,
   leaseSchema, grantSchema, contextReceiptSchema,
   artifactReferenceSchema, attentionItemSchema,
+  verificationRecipeSchema, verificationSchema, reviewSchema,
   taskStatusSchema, runStatusSchema, invocationStatusSchema,
   dispatchIntentStateSchema, leaseStateSchema, grantStateSchema,
-  receiptStatusSchema, attentionStateSchema } from "./managed";
+  receiptStatusSchema, attentionStateSchema,
+  verificationStatusSchema, reviewStatusSchema, reviewDecisionSchema } from "./managed";
 
 /** Wire-shape view of a task for the read-only review shell. */
 export const taskViewSchema = taskSchema.pick({
@@ -153,9 +155,10 @@ export const artifactReferenceViewSchema = artifactReferenceSchema.pick({
 export type ArtifactReferenceView = z.infer<typeof artifactReferenceViewSchema>;
 
 /**
- * Wire-shape view of an attention item. The renderer only consumes the
- * header fields; the JSON payload stays encoded because no UI surface
- * parses it yet — read-only M3c.1 surfaces closed items for lineage only.
+ * Wire-shape view of an attention item. M3c.3 surfaces `payloadJson`
+ * (the renderer parses it lazily per `kind` inside `try/catch` and
+ * renders escaped text) and `snoozedUntil` (so the badge can re-surface
+ * items when the deadline passes).
  */
 export const attentionItemViewSchema = attentionItemSchema.pick({
   id: true,
@@ -164,6 +167,8 @@ export const attentionItemViewSchema = attentionItemSchema.pick({
   issueIdentity: true,
   revision: true,
   state: true,
+  payloadJson: true,
+  snoozedUntil: true,
   createdAt: true,
   updatedAt: true,
 }).extend({
@@ -206,6 +211,89 @@ export const runStreamEntrySchema = z.object({
 export type RunStreamEntry = z.infer<typeof runStreamEntrySchema>;
 
 /**
+ * Wire-shape view of a verification recipe (M3c.2). The recipe is
+ * per-project configuration the renderer lists under the "Verifier"
+ * section of `TaskDetail`. The `configurationRevision` is what a
+ * `review` binds to — a recipe edit rotates the digest, and the next
+ * `verifyOnce` opens a fresh review under the new revision.
+ */
+export const verificationRecipeViewSchema = verificationRecipeSchema.pick({
+  id: true,
+  projectId: true,
+  name: true,
+  command: true,
+  argvJson: true,
+  envJson: true,
+  assertionPattern: true,
+  required: true,
+  configurationRevision: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({});
+export type VerificationRecipeView = z.infer<typeof verificationRecipeViewSchema>;
+
+/**
+ * Wire-shape view of a verification (M3c.2). One row per verifier run.
+ * The renderer consumes the bounded stdout/stderr tails and the
+ * `required_check_results_json` array under the "Verifier" section.
+ */
+export const verificationViewSchema = verificationSchema.pick({
+  id: true,
+  taskId: true,
+  runId: true,
+  recipeId: true,
+  command: true,
+  cwd: true,
+  argvJson: true,
+  envJson: true,
+  configurationRevision: true,
+  candidateBase: true,
+  candidateTree: true,
+  candidateDiff: true,
+  status: true,
+  exitCode: true,
+  signal: true,
+  startedAt: true,
+  endedAt: true,
+  assertionCountsJson: true,
+  requiredCheckResultsJson: true,
+  stdoutTailJson: true,
+  stderrTailJson: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  status: verificationStatusSchema,
+});
+export type VerificationView = z.infer<typeof verificationViewSchema>;
+
+/**
+ * Wire-shape view of a review (M3c.2). The renderer consumes the
+ * status badge + the candidate identity triple under the "Review"
+ * section. `evidenceVerificationIdsJson` is a JSON-encoded array of
+ * verification UUIDs the renderer can resolve against `verifications`.
+ */
+export const reviewViewSchema = reviewSchema.pick({
+  id: true,
+  taskId: true,
+  runId: true,
+  evidenceVerificationIdsJson: true,
+  candidateBase: true,
+  candidateTree: true,
+  candidateDiff: true,
+  configurationRevision: true,
+  status: true,
+  decision: true,
+  decidedBy: true,
+  decisionNote: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  status: reviewStatusSchema,
+  decision: reviewDecisionSchema.nullable(),
+});
+export type ReviewView = z.infer<typeof reviewViewSchema>;
+
+/**
  * Top-level wire shape returned by `buildManagedProjection(worker)`.
  *
  * - `available` is `false` when the projection cannot be built (DB not
@@ -241,8 +329,21 @@ export const managedProjectionSchema = z.object({
   contextReceipts: z.array(contextReceiptViewSchema),
   /** Artifact references tied to a task or run. */
   artifacts: z.array(artifactReferenceViewSchema),
-  /** Closed attention items only — open items belong to the future inbox. */
+  /**
+   * M3c.3 — open attention items driving the persistent inbox badge +
+   * slide-in panel. "Open" = state ∈ {new, seen, snoozed} AND
+   * (snoozedUntil IS NULL OR snoozedUntil <= generatedAt). The badge
+   * count comes from this array's length.
+   */
+  openAttention: z.array(attentionItemViewSchema),
+  /** Closed attention items (resolved/dismissed) for the per-task history pane. */
   closedAttention: z.array(attentionItemViewSchema),
+  /** M3c.2 — verification recipes (per-project). */
+  recipes: z.array(verificationRecipeViewSchema),
+  /** M3c.2 — verification rows (one per verifier run, task-scoped). */
+  verifications: z.array(verificationViewSchema),
+  /** M3c.2 — review rows (the acceptance state machine). */
+  reviews: z.array(reviewViewSchema),
   /** Persisted event rows for managed work, in seq order. */
   stream: z.array(runStreamEntrySchema),
 });

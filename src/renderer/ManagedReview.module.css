@@ -1,5 +1,5 @@
 /*
- * M3c.1 — read-only review shell styles.
+ * M3c.1 / M3c.2 — managed review shell styles.
  *
  * The shell sits where `SessionSidebar` normally sits, so it inherits
  * the same `256px` width budget split three ways: 220 list, flex detail,
@@ -192,6 +192,7 @@
 .managed-status-dismissed { color: #7c867f; }
 .managed-status-imported { color: #9bd1ff; }
 .managed-status-held { color: #c5edaa; }
+.managed-status-unknown { color: #6e7a6b; }
 
 /* detail */
 .managed-detail-body {
@@ -344,4 +345,316 @@
   word-break: break-all;
   max-height: 180px;
   overflow-y: auto;
+}
+
+/* M3c.2 — verifier + review sections.
+ *
+ * Reuse the section / row grid from the runs/invocations blocks; add
+ * button + badge variants for the interactive Accept/Reject/Approve
+ * affordances. The colour palette is deliberately muted; status hues
+ * match the existing .managed-status-* classes so the user can scan
+ * the section without learning a second palette.
+ */
+.managed-recipe-list,
+.managed-review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.managed-recipe-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: #1d221f;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #cbd3c5;
+}
+.managed-recipe-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.managed-recipe-name {
+  font-size: 11.5px;
+  color: #f1f4ef;
+  font-weight: 600;
+}
+.managed-recipe-cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #95a08f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.managed-recipe-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.managed-badge {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #232924;
+  color: #9ba597;
+}
+.managed-badge-running {
+  background: #2c3a2c;
+  color: #c5edaa;
+}
+
+.managed-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: #2a302c;
+  color: #dce1dc;
+  border: 1px solid #3a4239;
+  cursor: pointer;
+  text-transform: none;
+}
+.managed-button:hover:not(:disabled) {
+  background: #323832;
+}
+.managed-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.managed-button-primary {
+  background: #2d4f2d;
+  border-color: #3d6b3d;
+  color: #d9efcc;
+}
+.managed-button-primary:hover:not(:disabled) {
+  background: #386138;
+}
+.managed-button-accept {
+  background: #2d4f2d;
+  border-color: #3d6b3d;
+  color: #d9efcc;
+}
+.managed-button-accept:hover:not(:disabled) {
+  background: #386138;
+}
+.managed-button-reject {
+  background: #4a2d2d;
+  border-color: #6b3d3d;
+  color: #efd1cc;
+}
+.managed-button-reject:hover:not(:disabled) {
+  background: #613838;
+}
+
+.managed-review-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: #1d221f;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #cbd3c5;
+}
+.managed-review-row-accepted { border-left: 2px solid #5b8c5b; }
+.managed-review-row-rejected { border-left: 2px solid #8c5b5b; }
+.managed-review-row-invalidated { border-left: 2px solid #6e7a6b; }
+.managed-review-row-open { border-left: 2px solid #4f6a8c; }
+
+.managed-review-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.managed-review-identity {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #d4dacf;
+}
+.managed-review-evidence,
+.managed-review-by {
+  font-size: 10.5px;
+  color: #95a08f;
+}
+.managed-review-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.managed-review-terminal {
+  font-size: 9.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #6e7a6b;
+}
+
+/* M3c.4 — diff/artifact view.
+ *
+ * Diff section: line-type colour classes (`+` green, `-` red, ` `
+ * neutral, `@@` hunk slate, file headers slate). The body itself uses
+ * `white-space: pre-wrap` + `word-break: break-all` so long lines stay
+ * inside the column without forcing horizontal scroll.
+ *
+ * Artifact preview drawer: absolutely-positioned right-side panel
+ * (~420 px wide) anchored inside the `managed-review` shell. Escape
+ * closes (handler is in the component, not the CSS).
+ */
+.managed-section h3 > .managed-button {
+  margin-left: auto;
+}
+
+.managed-empty-warn {
+  color: #e8c87b !important;
+}
+.managed-empty-error {
+  color: #e89090 !important;
+}
+
+.diff-body {
+  border: 1px solid #2a302c;
+  border-radius: 6px;
+  background: #111512;
+  overflow: hidden;
+}
+.diff-meta {
+  display: flex;
+  gap: 14px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #2a302c;
+  background: #181c19;
+  font-size: 10px;
+  color: #95a08f;
+  letter-spacing: 0.4px;
+}
+.diff-meta code,
+.diff-meta span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.diff-pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #cbd3c5;
+  background: #111512;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-line-add { color: #c5edaa; display: inline; }
+.diff-line-del { color: #e89090; display: inline; }
+.diff-line-neutral { color: #cbd3c5; display: inline; }
+.diff-line-hunk { color: #9bd1ff; display: inline; }
+.diff-line-file-header { color: #95a08f; display: inline; }
+
+.managed-button-preview {
+  font-size: 10px;
+  padding: 3px 8px;
+}
+.managed-button-preview.active {
+  background: #2d4f2d;
+  border-color: #3d6b3d;
+  color: #d9efcc;
+}
+
+.managed-artifact-row {
+  grid-template-columns: 14px 78px 90px 1fr auto !important;
+}
+
+.artifact-preview-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 420px;
+  max-width: 90%;
+  height: 100%;
+  background: #1a1f1b;
+  border-left: 1px solid #303830;
+  display: flex;
+  flex-direction: column;
+  font-size: 11.5px;
+  color: #dce1dc;
+  z-index: 5;
+  box-shadow: -8px 0 16px rgba(0, 0, 0, 0.4);
+}
+.artifact-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #2a302c;
+  background: #181c19;
+}
+.artifact-preview-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #dce1dc;
+}
+.artifact-preview-title strong {
+  font-weight: 600;
+  color: #f1f4ef;
+}
+.artifact-preview-body {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px;
+  min-height: 0;
+}
+.artifact-preview-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: #111512;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #cbd3c5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.artifact-preview-footer {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  padding: 8px 12px;
+  border-top: 1px solid #2a302c;
+  background: #181c19;
+  font-size: 10px;
+}
+.artifact-preview-footer > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.artifact-preview-footer code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: #d4dacf;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }

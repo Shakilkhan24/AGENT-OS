@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
+  Bell,
   Check,
   ChevronRight,
   Command,
@@ -27,6 +28,7 @@ const Terminal = lazy(() =>
 import { SessionSidebar } from "./SessionSidebar";
 import { WorkspaceDialog, type Dialog } from "./WorkspaceDialog";
 import { ManagedReview } from "./ManagedReview";
+import { AttentionInbox } from "./AttentionInbox";
 export function App() {
   const [sessionId, setSessionId] = useState(
     localStorage.getItem("minimal.session") || "",
@@ -58,6 +60,9 @@ export function App() {
   const [managedMode, setManagedMode] = useState(
     localStorage.getItem("minimal.managed") === "on",
   );
+  // M3c.3 — persistent attention inbox panel. Visibility is local state
+  // (no auto-open on background activity; background never steals focus).
+  const [inboxOpen, setInboxOpen] = useState(false);
   const [launchInitial, setLaunchInitial] = useState<LaunchRequest>({
     command: "",
   });
@@ -89,7 +94,7 @@ export function App() {
     void window.minimal.getAppInfo().then(info => { if (active) setVersion(info.appVersion); }).catch(report);
     return () => { active = false; };
   }, [report]);
-  const { snapshot, ready, accept } = useWorkspace(report);
+  const { snapshot, ready, accept, refresh } = useWorkspace(report);
   // Surface a recovery notice (e.g. malformed state.json) from the main
   // process through the same toast channel IPC errors use.
   useEffect(() => {
@@ -261,6 +266,26 @@ export function App() {
               <span className={`dot ${snapshot.engineError ? "" : "live"}`} />
               {snapshot.engineError ? "Status unavailable" : `${running} running`}
             </span>
+            {/* M3c.3 — persistent attention inbox badge. The button is
+                rendered whenever the projection has any open items;
+                clicking opens the slide-in panel. Background output never
+                calls `window.focus()` so the badge stays passive. */}
+            {snapshot.managed?.available === true && snapshot.managed.openAttention.length > 0 ? (
+              <button
+                className={`icon-button inbox-button ${inboxOpen ? "active" : ""}`}
+                aria-label={`Open attention inbox (${snapshot.managed.openAttention.length} open)`}
+                aria-pressed={inboxOpen}
+                title="Open attention inbox"
+                onClick={() => setInboxOpen(value => !value)}
+              >
+                <Bell size={16} />
+                <span className="inbox-badge">
+                  {snapshot.managed.openAttention.length > 99
+                    ? "99+"
+                    : String(snapshot.managed.openAttention.length)}
+                </span>
+              </button>
+            ) : null}
             {/* M1.6: closing the window keeps the runtime alive. This is the only
                 in-app affordance to actually terminate it. */}
             <button
@@ -548,6 +573,15 @@ export function App() {
           directory={directory} setDirectory={setDirectory} draftPresets={draftPresets}
           setDraftPresets={setDraftPresets} report={report} />
       )}
+      {/* M3c.3 — slide-in attention inbox panel. Renders nothing when
+          closed OR when the projection is unavailable / empty. */}
+      {inboxOpen && snapshot.managed?.available === true && snapshot.managed.openAttention.length > 0 ? (
+        <AttentionInbox
+          items={snapshot.managed.openAttention}
+          onChanged={refresh}
+          onClose={() => setInboxOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

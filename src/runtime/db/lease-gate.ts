@@ -13,16 +13,33 @@
  * can offer the user the choice between inspecting the workspace or
  * tearing the checkout down. A successful call returns a new fencing
  * token the caller can stamp onto the next mutation.
+ *
+ * M3c.2 — when the input carries `runId` and `invalidateReason`, a
+ * successful body call also invalidates every `open` review for that
+ * run (transitioning to `invalidated` and raising an
+ * `attention_item(kind: review)` per invalidated review). This couples
+ * the review state machine to the same `head_revision` / dirty-set the
+ * mutation just advanced.
  */
 import { z } from "zod";
 import { AppError } from "../../shared/errors";
 import { readActiveLease } from "./leases";
+import { invalidateOpenReviewsForRun } from "./reviews";
 import type { DbWorker } from "./worker";
 
 const GATE_INPUT = z.object({
   workspaceId: z.string().uuid(),
   holder: z.string().min(1).max(256),
   fencingToken: z.number().int().min(0),
+  /**
+   * M3c.2: optional run id. When supplied, a successful body call
+   * invalidates every `open` review for the run (see
+   * `invalidateOpenReviewsForRun`). Callers that do not own a run
+   * (e.g. one-shot maintenance mutations) omit this.
+   */
+  runId: z.string().uuid().optional(),
+  /** M3c.2: the reason passed to `invalidateOpenReviewsForRun`. */
+  invalidateReason: z.string().min(1).max(256).optional(),
 }).strict();
 export type MutateWithLeaseInput = z.input<typeof GATE_INPUT>;
 
@@ -69,6 +86,9 @@ export async function assertLease(worker: DbWorker, input: MutateWithLeaseInput)
 /**
  * Wrap a mutation body so the gate is checked before the body runs and
  * the lease is auto-renewed on success (the writer is presumed alive).
+ *
+ * M3c.2: when the input carries `runId` + `invalidateReason`, the
+ * post-body step also invalidates open reviews for the run.
  */
 export async function mutateWithLease<T>(
   worker: DbWorker,
@@ -77,9 +97,11 @@ export async function mutateWithLease<T>(
 ): Promise<T> {
   await assertLease(worker, input);
   const out = await body();
-  // The lease service bumps the fencing token on renew; the renderer
-  // MUST read the new token before its next mutation. We don't renew
-  // here automatically because the controller may not have actually
-  // finished work — renewal is an explicit act.
+  // M3c.2 — invalidate open reviews only after the body succeeds. A
+  // failed body does not advance the candidate, so reviews stay valid.
+  const parsed = GATE_INPUT.parse(input);
+  if (parsed.runId && parsed.invalidateReason) {
+    await invalidateOpenReviewsForRun(worker, parsed.runId, parsed.invalidateReason);
+  }
   return out;
 }

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { z } from "zod";
 import { API_VERSION, parseSignal } from "../shared/protocol";
 import type { RuntimePeer, ServerSignal } from "../shared/runtime-protocol";
 import { AppError } from "../shared/errors";
@@ -15,6 +16,11 @@ import type { RuntimeEndpoint } from "./control-server";
 import { TerminalInputQueue, type InputQueueProgress } from "./input-queue";
 import { openManagedDatabase, type OwnedDb } from "./db-owner";
 import { buildManagedProjection } from "./managed-projection";
+import { verifyOnce } from "./orchestration/verifier-execute";
+import { acceptReview, rejectReview } from "./db/reviews";
+import { transitionAttention, snoozeAttention } from "./db/attention-items";
+import { previewArtifact } from "./db/artifact-references";
+import { renderCandidateDiff } from "./db/candidate-diff";
 
 /** Domain ownership without Electron. One selected attachment is retained until M5. */
 export class RuntimeWorkspace {
@@ -132,6 +138,119 @@ export class RuntimeWorkspace {
       return this.inputQueue.enqueue(token, data);
     });
     dispatcher.register("cancel-input", ([token]) => ({ dropped: this.inputQueue.cancel(token) }));
+    // M3c.2 — verifier executor + review decisions. The verifier is a
+    // one-shot `spawn` over the recipe/override, not a provider-bound
+    // `executeOnce`. A `conflict` return is a regular IPC response, not
+    // a thrown `AppError`, so the renderer can surface the human reason.
+    dispatcher.register("execute-verification", async ([taskId, recipeId, override]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const input: { taskId: string; recipeId?: string; command?: string; argv?: string[]; env?: Record<string, string>; deadlineAt: string } = {
+          taskId,
+          deadlineAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        };
+        if (recipeId) input.recipeId = recipeId;
+        else if (override) {
+          input.command = override.command;
+          if (override.argv) input.argv = override.argv;
+          if (override.env) input.env = override.env;
+        }
+        const result = await verifyOnce(worker, input);
+        if (result.kind === "ok") return { kind: "ok" as const, verificationId: result.verificationId, reviewId: result.reviewId };
+        return { kind: "conflict" as const, reason: result.reason };
+      } catch (error) {
+        // Zod refinement errors and `AppError("CONFLICT"|"NOT_FOUND")` from
+        // the executor surface as a structured conflict so the renderer
+        // doesn't have to parse `AppError` shape itself.
+        if (error instanceof AppError) return { kind: "conflict" as const, reason: error.message };
+        if (error instanceof z.ZodError) {
+          const first = error.issues[0]?.message ?? "invalid input";
+          return { kind: "conflict" as const, reason: first };
+        }
+        throw error;
+      }
+    });
+    dispatcher.register("record-review-decision", async ([reviewId, decision, decidedBy]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const review = decision === "accept"
+          ? await acceptReview(worker, reviewId, { decidedBy })
+          : await rejectReview(worker, reviewId, { decidedBy });
+        return { kind: "ok" as const, reviewId: review.id, status: review.status };
+      } catch (error) {
+        if (error instanceof AppError) return { kind: "conflict" as const, reason: error.message };
+        throw error;
+      }
+    });
+    // M3c.3 — persistent attention inbox + bounded artifact previews.
+    // The renderer never has to issue two calls; `snooze-attention`
+    // widens `new → seen` internally so the FSM path stays single-step.
+    // All three surface `AppError` as a structured conflict so the
+    // renderer surfaces a human reason without parsing `Failure` shape.
+    dispatcher.register("transition-attention", async ([id, to]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const item = await transitionAttention(worker, id, to);
+        return {
+          id: item.id, taskId: item.taskId, kind: item.kind,
+          issueIdentity: item.issueIdentity, revision: item.revision,
+          state: item.state, payloadJson: item.payloadJson,
+          snoozedUntil: item.snoozedUntil,
+          createdAt: item.createdAt, updatedAt: item.updatedAt,
+        };
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    dispatcher.register("snooze-attention", async ([id, until]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const item = await snoozeAttention(worker, { id, until: new Date(until) });
+        return {
+          id: item.id, taskId: item.taskId, kind: item.kind,
+          issueIdentity: item.issueIdentity, revision: item.revision,
+          state: item.state, payloadJson: item.payloadJson,
+          snoozedUntil: item.snoozedUntil,
+          createdAt: item.createdAt, updatedAt: item.updatedAt,
+        };
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    dispatcher.register("preview-artifact", async ([id, principal, scopeJson]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const preview = await previewArtifact(worker, { id, principal, scopeJson });
+        return {
+          id: preview.id, sha256: preview.sha256, mime: preview.mime,
+          bytes: preview.bytes, truncated: preview.truncated,
+          truncatedBase64Content: preview.truncatedBase64Content,
+        };
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    // M3c.4 — diff/artifact view. The runtime shells out to `git diff`
+    // inside the run's worktree (cap = 256 KiB) and returns the
+    // bounded unified diff. `AppError` becomes a structured conflict
+    // so the renderer surfaces a human reason without parsing
+    // `Failure` shape — same wrapping as the M3c.3 handlers.
+    dispatcher.register("render-candidate-diff", async ([runId]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const diff = await renderCandidateDiff(worker, { runId });
+        return {
+          runId: diff.runId, base: diff.base, tree: diff.tree,
+          bytes: diff.bytes, truncated: diff.truncated, body: diff.body,
+        };
+      } catch (error) {
+        if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
     const endpoint: RuntimeEndpoint = {
       dispatch: request => dispatcher.dispatch(request.method, request),
       cancel: id => dispatcher.cancel(id),

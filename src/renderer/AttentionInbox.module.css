@@ -1,0 +1,219 @@
+/*
+ * M3c.3 — attention inbox panel styles.
+ *
+ * Anchored to the left edge of the window, overlaying the existing
+ * sidebar. The panel is `360px` wide and full height; the surface stays
+ * inside the app shell (no `window.focus()` is called on IPC results).
+ */
+.attention-inbox {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 360px;
+  background: #1a1f1b;
+  color: #dce1dc;
+  border-right: 1px solid #303830;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+  box-shadow: 6px 0 16px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
+.attention-inbox-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #303830;
+  background: #181c19;
+}
+.attention-inbox-header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f4ef;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.attention-inbox-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  background: #b56b3b;
+  color: #1a1207;
+  border-radius: 9px;
+}
+
+.attention-inbox-error {
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border: 1px solid #6b3a3a;
+  background: #2a1a1a;
+  color: #f1c5c5;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.attention-inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 12px 12px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.attention-inbox-group {
+  background: #20251f;
+  border: 1px solid #303830;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.attention-inbox-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.attention-inbox-kind {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #2e352a;
+  color: #d2dccc;
+}
+.attention-inbox-kind-decision { background: #2a3a30; color: #b9e0c4; }
+.attention-inbox-kind-conflict { background: #3a2a2a; color: #f0bfbf; }
+.attention-inbox-kind-review { background: #2f2a3a; color: #c9bcf0; }
+.attention-inbox-kind-stop { background: #3a322a; color: #f0d6bc; }
+.attention-inbox-identity {
+  flex: 1;
+  font-weight: 600;
+  color: #f1f4ef;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attention-inbox-chip {
+  font-size: 10px;
+  font-weight: 700;
+  background: #303830;
+  color: #dce1dc;
+  border-radius: 9px;
+  padding: 2px 8px;
+}
+
+.attention-inbox-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.attention-inbox-row.compact {
+  border-top: 1px dashed #303830;
+  padding-top: 8px;
+  margin-top: 8px;
+}
+.attention-inbox-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #95a08f;
+}
+.attention-inbox-state {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+.attention-inbox-state-new { color: #f0bfbf; }
+.attention-inbox-state-seen { color: #b9e0c4; }
+.attention-inbox-state-snoozed { color: #c9bcf0; }
+.attention-inbox-state-dismissed { color: #95a08f; }
+.attention-inbox-state-resolved { color: #6f8576; }
+
+.attention-inbox-payload {
+  margin: 0;
+  padding: 6px 8px;
+  background: #181c19;
+  border-radius: 4px;
+  font-family: "ui-monospace", "Menlo", "Consolas", monospace;
+  font-size: 11px;
+  color: #dce1dc;
+  overflow-x: auto;
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.attention-inbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.attention-inbox-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #303830;
+  color: #dce1dc;
+  border: 1px solid #404840;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.attention-inbox-actions button:hover { background: #404840; }
+.attention-inbox-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.attention-inbox-disclosure {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  background: transparent;
+  color: #95a08f;
+  border: 0;
+  padding: 4px 0;
+  text-align: left;
+  font-size: 11px;
+  cursor: pointer;
+}
+.attention-inbox-disclosure:hover { color: #dce1dc; }
+
+.attention-inbox-older { padding: 0; }
+
+.attention-inbox-footer {
+  border-top: 1px solid #303830;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: flex-end;
+  background: #181c19;
+}
+.attention-inbox-mark-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid #404840;
+  color: #dce1dc;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.attention-inbox-mark-all:hover:not(:disabled) { background: #303830; }
+.attention-inbox-mark-all:disabled { opacity: 0.45; cursor: not-allowed; }

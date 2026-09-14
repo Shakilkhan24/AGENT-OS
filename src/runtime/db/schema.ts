@@ -26,8 +26,11 @@ import {
   grantSchema,
   invocationSchema,
   leaseSchema,
+  reviewSchema,
   runSchema,
   taskSchema,
+  verificationRecipeSchema,
+  verificationSchema,
   workspaceSchema,
 } from "../../shared/managed";
 
@@ -352,7 +355,8 @@ export const tableSpecs: readonly TableSpec[] = [
       state TEXT NOT NULL DEFAULT 'new',
       payload_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      snoozed_until TEXT
     )`,
     indices: [
       "CREATE INDEX attention_kind_idx ON attention_item(kind)",
@@ -402,6 +406,89 @@ export const tableSpecs: readonly TableSpec[] = [
       "CREATE INDEX receipt_run_idx ON context_receipt(run_id)",
       "CREATE INDEX receipt_status_idx ON context_receipt(status)",
       "CREATE UNIQUE INDEX receipt_run_idx ON context_receipt(run_id)",
+    ],
+  },
+  // M3c.2 — verifier executor + review-binding. Recipes live per-project;
+  // a verification records one execution of a recipe (or a one-off
+  // command override); a review is the acceptance state machine bound to
+  // (candidate identity triple, configuration revision, evidence ids).
+  {
+    name: "verification_recipe",
+    ddl: `CREATE TABLE verification_recipe (
+      ${rowId},
+      ${uuidColumn},
+      project_id TEXT NOT NULL DEFAULT '',
+      name TEXT NOT NULL,
+      command TEXT NOT NULL,
+      argv_json TEXT NOT NULL DEFAULT '[]',
+      env_json TEXT NOT NULL DEFAULT '{}',
+      assertion_pattern TEXT,
+      required INTEGER NOT NULL DEFAULT 1,
+      configuration_revision TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX verification_recipe_project_idx ON verification_recipe(project_id)",
+    ],
+  },
+  {
+    name: "verification",
+    ddl: `CREATE TABLE verification (
+      ${rowId},
+      ${uuidColumn},
+      task_id TEXT,
+      run_id TEXT,
+      recipe_id TEXT,
+      command TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      argv_json TEXT NOT NULL DEFAULT '[]',
+      env_json TEXT NOT NULL DEFAULT '{}',
+      configuration_revision TEXT,
+      candidate_base TEXT,
+      candidate_tree TEXT,
+      candidate_diff TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      exit_code INTEGER,
+      signal TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      assertion_counts_json TEXT,
+      required_check_results_json TEXT NOT NULL DEFAULT '[]',
+      stdout_tail_json TEXT NOT NULL DEFAULT '""',
+      stderr_tail_json TEXT NOT NULL DEFAULT '""',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX verification_task_idx ON verification(task_id)",
+      "CREATE INDEX verification_run_idx ON verification(run_id)",
+      "CREATE INDEX verification_status_idx ON verification(status)",
+    ],
+  },
+  {
+    name: "review",
+    ddl: `CREATE TABLE review (
+      ${rowId},
+      ${uuidColumn},
+      task_id TEXT,
+      run_id TEXT,
+      evidence_verification_ids_json TEXT NOT NULL DEFAULT '[]',
+      candidate_base TEXT,
+      candidate_tree TEXT,
+      candidate_diff TEXT,
+      configuration_revision TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      decision TEXT,
+      decided_by TEXT,
+      decision_note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX review_task_idx ON review(task_id)",
+      "CREATE INDEX review_run_idx ON review(run_id)",
+      "CREATE INDEX review_status_idx ON review(status)",
     ],
   },
 ];
@@ -458,3 +545,12 @@ export const artifactReferenceRowSchema = artifactReferenceSchema.extend({ uuid:
 export const attentionItemRowSchema = attentionItemSchema.extend({ uuid: z.string().uuid() });
 export const leaseRowSchema = leaseSchema.extend({ uuid: z.string().uuid() });
 export const contextReceiptRowSchema = contextReceiptSchema.extend({ uuid: z.string().uuid() });
+
+// M3c.2 — verifier executor + review binding row schemas. Each row carries
+// its UUID as the public `id`; the column → property renames mirror the
+// existing M3a/M3b tables. `required` flips to/from a 0/1 INTEGER.
+// `configurationRevision` is the SHA-256 of the recipe at last write; it
+// is what binds a review to "the configuration revision the user accepted".
+export const verificationRecipeRowSchema = verificationRecipeSchema.extend({ uuid: z.string().uuid() });
+export const verificationRowSchema = verificationSchema.extend({ uuid: z.string().uuid() });
+export const reviewRowSchema = reviewSchema.extend({ uuid: z.string().uuid() });

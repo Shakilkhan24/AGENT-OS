@@ -114,5 +114,22 @@ const api: API = {
     ipcRenderer.on("workspace-changed", wrapped);
     return () => { ipcRenderer.removeListener("workspace-changed", wrapped); };
   },
+  executeVerification: (taskId, recipeId, override) =>
+    call("execute-verification", taskId, recipeId, override ?? null),
+  recordReviewDecision: (reviewId, decision, decidedBy) =>
+    call("record-review-decision", reviewId, decision, decidedBy),
+  // M3c.3 — persistent attention inbox + bounded artifact previews.
+  transitionAttention: (id, to) =>
+    call("transition-attention", id, to),
+  snoozeAttention: (id, until) =>
+    call("snooze-attention", id, until),
+  previewArtifact: (id, principal, scopeJson) =>
+    call("preview-artifact", id, principal, scopeJson ?? null),
+  // M3c.4 — diff/artifact view. The runtime shells out to `git diff`
+  // inside the run's worktree and returns a bounded unified diff
+  // (cap = 256 KiB). The desktop auto-forward loop in
+  // `src/main/index.ts:124-137` picks up the new method key.
+  renderCandidateDiff: (runId) =>
+    call("render-candidate-diff", runId),
 };
 contextBridge.exposeInMainWorld("minimal", api);

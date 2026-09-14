@@ -26,7 +26,7 @@ import { createTask, transitionTask } from "../../src/runtime/db/tasks";
 import { createRun, transitionRun } from "../../src/runtime/db/runs";
 import { createInvocation, transitionInvocation } from "../../src/runtime/db/invocations";
 import { recordDispatchIntent, transitionDispatchIntent } from "../../src/runtime/db/dispatch-intents";
-import { raiseAttention, transitionAttention } from "../../src/runtime/db/attention-items";
+import { raiseAttention, transitionAttention, snoozeAttention, readAttention } from "../../src/runtime/db/attention-items";
 import { createWorkspace } from "../../src/runtime/db/workspaces";
 import { acquireLease } from "../../src/runtime/db/leases";
 import { pinArtifact } from "../../src/runtime/db/artifact-references";
@@ -213,5 +213,178 @@ test("buildManagedProjection projects a workspace lease and a pinned artifact", 
     assert.equal(projection.artifacts.length, 1);
     assert.equal(projection.artifacts[0]!.uri, "file:///tmp/example.txt");
     assert.equal(projection.grants.length, 0);
+  } finally { await worker.close(); }
+});
+
+test("buildManagedProjection includes verification recipes on the recipes slice", async () => {
+  const worker = freshWorker();
+  try {
+    await createTask(worker, { title: "t", hostId: "h1", projectId: "minimal" });
+    const { createRecipe } = await import("../../src/runtime/db/verification-recipes");
+    const recipe = await createRecipe(worker, {
+      projectId: "minimal", name: "unit tests", command: "npm",
+      argv: ["test"], env: {}, required: true,
+    });
+    const projection = await buildManagedProjection(worker);
+    assert.equal(projection.available, true);
+    if (projection.available !== true) throw new Error("expected available projection");
+    assert.equal(projection.recipes.length, 1);
+    assert.equal(projection.recipes[0]!.name, "unit tests");
+    assert.equal(projection.recipes[0]!.configurationRevision, recipe.configurationRevision);
+    assert.equal(projection.recipes[0]!.required, true);
+  } finally { await worker.close(); }
+});
+
+test("buildManagedProjection surfaces a verification row with identity triple and required check results", async () => {
+  const worker = freshWorker();
+  try {
+    const { id: taskId } = await createTask(worker, { title: "t", hostId: "h1", projectId: "p1" });
+    const { createVerification, recordVerificationOutput } = await import("../../src/runtime/db/verifications");
+    const v = await createVerification(worker, {
+      taskId, command: "echo", cwd: "/tmp",
+      candidateBase: "abcdef0", candidateTree: "abcdef1",
+      candidateDiff: "d".repeat(64),
+    });
+    await recordVerificationOutput(worker, v.id, {
+      exitCode: 0, signal: null,
+      assertionCounts: { tests_total: 12, tests_passed: 12 },
+      requiredCheckResults: [{ name: "echo", status: "passed", observed: "ok" }],
+      stdoutTail: "ok\n", stderrTail: "", to: "passed",
+    });
+    const projection = await buildManagedProjection(worker);
+    assert.equal(projection.available, true);
+    if (projection.available !== true) throw new Error("expected available projection");
+    assert.equal(projection.verifications.length, 1);
+    const view = projection.verifications[0]!;
+    assert.equal(view.status, "passed");
+    assert.equal(view.candidateBase, "abcdef0");
+    assert.equal(view.candidateTree, "abcdef1");
+    assert.equal(view.candidateDiff, "d".repeat(64));
+    const counts = JSON.parse(view.assertionCountsJson!);
+    assert.equal(counts.tests_total, 12);
+    const results = JSON.parse(view.requiredCheckResultsJson) as Array<{ name: string; status: string }>;
+    assert.equal(results[0]!.name, "echo");
+    assert.equal(results[0]!.status, "passed");
+  } finally { await worker.close(); }
+});
+
+test("buildManagedProjection surfaces an open review and re-appears as invalidated after invalidateOpenReviewsForRun", async () => {
+  const worker = freshWorker();
+  try {
+    const { id: taskId } = await createTask(worker, { title: "t", hostId: "h1", projectId: "p1" });
+    const { createRun } = await import("../../src/runtime/db/runs");
+    const { createVerification, recordVerificationOutput } = await import("../../src/runtime/db/verifications");
+    const { createOpenReview, invalidateOpenReviewsForRun } = await import("../../src/runtime/db/reviews");
+    const run = await createRun(worker, { taskId });
+    const v = await createVerification(worker, { taskId, runId: run.id, command: "c", cwd: "/tmp" });
+    await recordVerificationOutput(worker, v.id, {
+      exitCode: 0, signal: null, assertionCounts: null,
+      requiredCheckResults: [{ name: "c", status: "passed" }],
+      stdoutTail: "", stderrTail: "", to: "passed",
+    });
+    const review = await createOpenReview(worker, {
+      taskId, runId: run.id, evidenceVerificationIds: [v.id],
+      candidateBase: "abcdef0", candidateTree: "abcdef1",
+      candidateDiff: "e".repeat(64),
+      configurationRevision: "f".repeat(64),
+    });
+    const first = await buildManagedProjection(worker);
+    assert.equal(first.available, true);
+    if (first.available !== true) throw new Error("expected available projection");
+    assert.equal(first.reviews.length, 1);
+    assert.equal(first.reviews[0]!.status, "open");
+    await invalidateOpenReviewsForRun(worker, run.id, "head-advanced");
+    const second = await buildManagedProjection(worker);
+    assert.equal(second.available, true);
+    if (second.available !== true) throw new Error("expected available projection");
+    assert.equal(second.reviews.length, 1);
+    assert.equal(second.reviews[0]!.status, "invalidated");
+    assert.equal(second.reviews[0]!.id, review.id);
+  } finally { await worker.close(); }
+});
+
+// M3c.3 — open/closed attention split + snooze filtering + payload round-trip.
+
+test("buildManagedProjection splits attention into open (drives inbox badge) and closed slices", async () => {
+  const worker = freshWorker();
+  try {
+    const openNew = await raiseAttention(worker, { kind: "decision", issueIdentity: "open-new", revision: 0 });
+    const openSeen = await raiseAttention(worker, { kind: "decision", issueIdentity: "open-seen", revision: 0 });
+    await transitionAttention(worker, openSeen.id, "seen");
+    const openSnoozed = await raiseAttention(worker, { kind: "decision", issueIdentity: "open-snoozed", revision: 0 });
+    await transitionAttention(worker, openSnoozed.id, "seen");
+    // Drive snooze via a deadline already in the past so the row re-
+    // surfaces in the open list — the public `snoozeAttention` API
+    // refuses past deadlines, so write directly to the column.
+    await worker.exclusive(() => {
+      const driver = (worker as unknown as { driver: { prepare(sql: string): { run(...b: unknown[]): void } } }).driver;
+      const past = new Date(Date.now() - 60_000).toISOString();
+      driver.prepare("UPDATE attention_item SET state = ?, snoozed_until = ? WHERE uuid = ?")
+        .run("snoozed", past, openSnoozed.id);
+    });
+    const dismissed = await raiseAttention(worker, { kind: "decision", issueIdentity: "closed-dismissed", revision: 0 });
+    await transitionAttention(worker, dismissed.id, "seen");
+    await transitionAttention(worker, dismissed.id, "dismissed");
+    const resolved = await raiseAttention(worker, { kind: "decision", issueIdentity: "closed-resolved", revision: 0 });
+    await transitionAttention(worker, resolved.id, "resolved");
+    void openNew; void openSeen;
+    const projection = await buildManagedProjection(worker);
+    assert.equal(projection.available, true);
+    if (projection.available !== true) throw new Error("expected available projection");
+    const openIdentities = new Set(projection.openAttention.map(item => item.issueIdentity));
+    assert.deepEqual(openIdentities, new Set(["open-new", "open-seen", "open-snoozed"]));
+    const closedIdentities = new Set(projection.closedAttention.map(item => item.issueIdentity));
+    assert.deepEqual(closedIdentities, new Set(["closed-dismissed", "closed-resolved"]));
+  } finally { await worker.close(); }
+});
+
+test("buildManagedProjection filters snoozed items whose snoozedUntil is strictly in the future", async () => {
+  const worker = freshWorker();
+  try {
+    const snoozedFuture = await raiseAttention(worker, { kind: "decision", issueIdentity: "snoozed-future", revision: 0 });
+    await snoozeAttention(worker, {
+      id: snoozedFuture.id,
+      until: new Date(Date.now() + 60 * 60_000), // 1h in the future
+    });
+    const futureless = await raiseAttention(worker, { kind: "decision", issueIdentity: "still-open", revision: 0 });
+    void futureless;
+    const projection = await buildManagedProjection(worker);
+    assert.equal(projection.available, true);
+    if (projection.available !== true) throw new Error("expected available projection");
+    // The snoozed item with a future deadline is filtered out — only the
+    // active `new` row remains.
+    assert.equal(projection.openAttention.length, 1);
+    assert.equal(projection.openAttention[0]!.issueIdentity, "still-open");
+    // It's also NOT in `closedAttention` because its state is `snoozed`.
+    assert.equal(projection.closedAttention.length, 0);
+    // And the view carries the projected `snoozedUntil` so the renderer
+    // can show a "snoozed until ..." hint if it wants to.
+    // Re-querying directly to assert the row was stored:
+    const direct = await readAttention(worker, snoozedFuture.id);
+    assert.ok(direct);
+    assert.equal(direct?.snoozedUntil != null, true);
+  } finally { await worker.close(); }
+});
+
+test("buildManagedProjection forwards payloadJson for an open attention item", async () => {
+  const worker = freshWorker();
+  try {
+    const payload = { reason: "head-advanced", invalidatedAt: new Date().toISOString() };
+    const item = await raiseAttention(worker, {
+      kind: "review",
+      issueIdentity: "review-invalidation",
+      revision: 0,
+      payload,
+    });
+    void item;
+    const projection = await buildManagedProjection(worker);
+    assert.equal(projection.available, true);
+    if (projection.available !== true) throw new Error("expected available projection");
+    assert.equal(projection.openAttention.length, 1);
+    assert.equal(projection.openAttention[0]!.payloadJson, JSON.stringify(payload));
+    // The renderer parses lazily; assert that round-tripping back into
+    // JSON gives us the original map (the lazy parse happens in the UI).
+    const parsed = JSON.parse(projection.openAttention[0]!.payloadJson) as { reason: string };
+    assert.equal(parsed.reason, "head-advanced");
   } finally { await worker.close(); }
 });

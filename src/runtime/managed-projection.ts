@@ -31,7 +31,10 @@ import { listLeases } from "./db/leases";
 import { listGrants } from "./db/grants";
 import { listContextReceipts } from "./db/context-receipts";
 import { listArtifacts } from "./db/artifact-references";
-import { listAttention } from "./db/attention-items";
+import { listAttention, listOpenAttention } from "./db/attention-items";
+import { listRecipes } from "./db/verification-recipes";
+import { listVerifications } from "./db/verifications";
+import { listReviews } from "./db/reviews";
 import { replaySince, takeSnapshot } from "./db/snapshot";
 import { MANAGED_STREAM_TYPES, type RunStreamType } from "./managed-stream-types";
 import {
@@ -44,12 +47,15 @@ import {
   contextReceiptViewSchema,
   artifactReferenceViewSchema,
   attentionItemViewSchema,
+  verificationRecipeViewSchema,
+  verificationViewSchema,
+  reviewViewSchema,
   runStreamEntrySchema,
   managedProjectionSchema,
   type ManagedProjection,
   type ManagedProjectionOrUnavailable,
 } from "../shared/managed-view";
-import type { Task, Run, Invocation, DispatchIntent, Lease, Grant, ContextReceipt, ArtifactReference, AttentionItem } from "../shared/managed";
+import type { Task, Run, Invocation, DispatchIntent, Lease, Grant, ContextReceipt, ArtifactReference, AttentionItem, VerificationRecipe, Verification, Review } from "../shared/managed";
 
 /* ───────── projection (entity → wire view) ─────────────────────────────── */
 
@@ -133,7 +139,52 @@ function projectAttentionView(item: AttentionItem) {
   return attentionItemViewSchema.parse({
     id: item.id, taskId: item.taskId, kind: item.kind,
     issueIdentity: item.issueIdentity, revision: item.revision,
-    state: item.state, createdAt: item.createdAt, updatedAt: item.updatedAt,
+    state: item.state, payloadJson: item.payloadJson,
+    snoozedUntil: item.snoozedUntil,
+    createdAt: item.createdAt, updatedAt: item.updatedAt,
+  });
+}
+
+function projectRecipeView(recipe: VerificationRecipe) {
+  return verificationRecipeViewSchema.parse({
+    id: recipe.id, projectId: recipe.projectId, name: recipe.name,
+    command: recipe.command, argvJson: recipe.argvJson, envJson: recipe.envJson,
+    assertionPattern: recipe.assertionPattern, required: recipe.required,
+    configurationRevision: recipe.configurationRevision,
+    createdAt: recipe.createdAt, updatedAt: recipe.updatedAt,
+  });
+}
+
+function projectVerificationView(verification: Verification) {
+  return verificationViewSchema.parse({
+    id: verification.id, taskId: verification.taskId, runId: verification.runId,
+    recipeId: verification.recipeId, command: verification.command, cwd: verification.cwd,
+    argvJson: verification.argvJson, envJson: verification.envJson,
+    configurationRevision: verification.configurationRevision,
+    candidateBase: verification.candidateBase,
+    candidateTree: verification.candidateTree,
+    candidateDiff: verification.candidateDiff,
+    status: verification.status, exitCode: verification.exitCode,
+    signal: verification.signal, startedAt: verification.startedAt,
+    endedAt: verification.endedAt,
+    assertionCountsJson: verification.assertionCountsJson,
+    requiredCheckResultsJson: verification.requiredCheckResultsJson,
+    stdoutTailJson: verification.stdoutTailJson,
+    stderrTailJson: verification.stderrTailJson,
+    createdAt: verification.createdAt, updatedAt: verification.updatedAt,
+  });
+}
+
+function projectReviewView(review: Review) {
+  return reviewViewSchema.parse({
+    id: review.id, taskId: review.taskId, runId: review.runId,
+    evidenceVerificationIdsJson: review.evidenceVerificationIdsJson,
+    candidateBase: review.candidateBase, candidateTree: review.candidateTree,
+    candidateDiff: review.candidateDiff,
+    configurationRevision: review.configurationRevision,
+    status: review.status, decision: review.decision, decidedBy: review.decidedBy,
+    decisionNote: review.decisionNote,
+    createdAt: review.createdAt, updatedAt: review.updatedAt,
   });
 }
 
@@ -211,9 +262,18 @@ export async function buildManagedProjection(worker: DbWorker | undefined): Prom
     const grants = await listGrants(worker);
     const receipts = await listContextReceipts(worker);
     const artifacts = await listArtifacts(worker);
+    // M3c.2 — verifier executor + review slices.
+    const recipes = await listRecipes(worker);
+    const verifications = await listVerifications(worker);
+    const reviews = await listReviews(worker);
 
-    // Attention — closed only. The persistent inbox is the M3c.3 surface.
+    // Attention — M3c.3 split into open (drives the inbox badge + panel)
+    // and closed (per-task history). `listOpenAttention` already filters
+    // by `{new, seen, snoozed}` AND `snoozedUntil` past its deadline;
+    // `listAttention` is read fresh here so the two slices are derived
+    // from the same point-in-time walk.
     const allAttention = await listAttention(worker);
+    const openAttention = await listOpenAttention(worker);
     const closedAttention = allAttention.filter(item =>
       item.state === "resolved" || item.state === "dismissed",
     );
@@ -264,7 +324,11 @@ export async function buildManagedProjection(worker: DbWorker | undefined): Prom
       grants: grants.map(projectGrantView),
       contextReceipts: receipts.map(projectReceiptView),
       artifacts: artifacts.map(projectArtifactView),
+      openAttention: openAttention.map(projectAttentionView),
       closedAttention: closedAttention.map(projectAttentionView),
+      recipes: recipes.map(projectRecipeView),
+      verifications: verifications.map(projectVerificationView),
+      reviews: reviews.map(projectReviewView),
       stream: linked,
     });
     return projection;

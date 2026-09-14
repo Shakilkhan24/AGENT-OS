@@ -10,6 +10,12 @@ import { terminalStatusSchema } from "./events";
 import { settingsSchema } from "./settings";
 import { utf8Bytes } from "./terminal-flow";
 import { managedProjectionSchema, managedProjectionUnavailableSchema } from "./managed-view";
+import { executeVerificationInputSchema, executeVerificationResultSchema,
+  recordReviewDecisionInputSchema, recordReviewDecisionResultSchema,
+  transitionAttentionInputSchema, transitionAttentionResultSchema,
+  snoozeAttentionInputSchema, snoozeAttentionResultSchema,
+  previewArtifactInputSchema, previewArtifactResultSchema,
+  renderCandidateDiffInputSchema, renderCandidateDiffResultSchema } from "./managed-schema";
 
 export const API_VERSION = 1;
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024;
@@ -63,6 +69,24 @@ export const methods = {
   input: method(z.tuple([id, z.string().max(65536)]), z.object({ admitted: z.number().int().min(0).max(65536) }).strict()),
   "cancel-input": method(z.tuple([id]), z.object({ dropped: z.number().int().min(0).max(8 * 1024 * 1024) }).strict()),
   "startup-recovery": method(z.tuple([]), z.string().nullable()),
+  // M3c.2 — verifier executor + review decisions. The dispatcher handlers
+  // live in `src/runtime/workspace.ts`; the desktop auto-forward loop in
+  // `src/main/index.ts:124-137` picks up these keys automatically. Both
+  // calls honour the request deadline; verifiers cap their own internal
+  // deadline via `deadlineAt` in the executor path.
+  "execute-verification": method(executeVerificationInputSchema, executeVerificationResultSchema, MAX_DEADLINE_MS),
+  "record-review-decision": method(recordReviewDecisionInputSchema, recordReviewDecisionResultSchema),
+  // M3c.3 — persistent attention inbox + bounded artifact previews.
+  // The dispatcher handlers live in `src/runtime/workspace.ts`; the
+  // desktop auto-forward loop in `src/main/index.ts:124-137` picks up
+  // these keys automatically.
+  "transition-attention": method(transitionAttentionInputSchema, transitionAttentionResultSchema),
+  "snooze-attention": method(snoozeAttentionInputSchema, snoozeAttentionResultSchema),
+  "preview-artifact": method(previewArtifactInputSchema, previewArtifactResultSchema),
+  // M3c.4 — diff/artifact view. The renderer asks for the candidate
+  // diff on demand; the runtime shells out to `git diff` inside the
+  // run's worktree and applies the 256 KiB cap. `since: 1.4.0`.
+  "render-candidate-diff": method(renderCandidateDiffInputSchema, renderCandidateDiffResultSchema, MAX_DEADLINE_MS),
 } as const;
 export type Method = keyof typeof methods;
 export type RequestArgs<M extends Method> = z.output<(typeof methods)[M]["request"]>;

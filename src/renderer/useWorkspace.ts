@@ -10,6 +10,7 @@ export function useWorkspace(report: (error: unknown) => void) {
   });
   const [ready, setReady] = useState(false);
   const latest = useRef(0);
+  const stoppedRef = useRef(false);
   const accept = useCallback((next: Snapshot) => {
     if (next.sequence < latest.current) return;
     latest.current = next.sequence;
@@ -42,12 +43,23 @@ export function useWorkspace(report: (error: unknown) => void) {
     void poll();
     return () => {
       stopped = true;
+      stoppedRef.current = true;
       clearTimeout(timer);
       unsubscribe();
       unsubscribeChanges();
     };
   }, [accept, report]);
-  return { snapshot, ready, accept };
+  // Refresh the snapshot on demand (used after IPC mutations that don't
+  // route through the orchestrator's change-bus, e.g. M3c.3 attention
+  // transitions and artifact previews).
+  const refresh = useCallback(async () => {
+    if (stoppedRef.current) return;
+    try {
+      const next = await window.minimal.snapshot();
+      accept(next);
+    } catch (error) { report(error); }
+  }, [accept, report]);
+  return { snapshot, ready, accept, refresh };
 }
 
 /**

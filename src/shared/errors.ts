@@ -15,6 +15,7 @@ export const failureSchema = z.object({
     "UNSUPPORTED_RESTRICTION",
     "LEASE_HELD",
     "LEASE_UNCERTAIN",
+    "FORBIDDEN",
   ]),
   message: z.string().max(4096),
   sourceId: z.string().max(200),

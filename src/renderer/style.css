@@ -201,6 +201,36 @@ h2 {
   color: #ef9c92;
   background: #c3645515;
 }
+
+/* M3c.3 — attention inbox badge on the topbar. The host button is a
+   regular `icon-button`; the badge is a small positioned dot. */
+.inbox-button {
+  position: relative;
+  width: auto;
+  padding: 0 8px;
+  gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+}
+.inbox-button.active {
+  background: #b56b3b33;
+  color: #f0c8a0;
+}
+.inbox-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  background: #b56b3b;
+  color: #1a1207;
+  border-radius: 8px;
+}
 .search-box {
   display: flex;
   align-items: center;

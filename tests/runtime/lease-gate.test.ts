@@ -15,6 +15,10 @@ import { DbWorker } from "../../src/runtime/db/worker";
 import { MemoryDatabase } from "../../src/runtime/db/memory";
 import { tableSpecs } from "../../src/runtime/db/schema";
 import { createTask } from "../../src/runtime/db/tasks";
+import { createRun } from "../../src/runtime/db/runs";
+import { createVerification, recordVerificationOutput } from "../../src/runtime/db/verifications";
+import { createOpenReview, readReview } from "../../src/runtime/db/reviews";
+import { listAttention } from "../../src/runtime/db/attention-items";
 import {
   prepareManagedWorkspace, stubGitAdapter,
 } from "../../src/runtime/db/workspace-prep";
@@ -156,5 +160,81 @@ test("mutateWithLease runs the body only when the lease is held", async () => {
       workspaceId: result.workspaceId, holder: "controller-A", fencingToken: result.fencingToken,
     }, async () => { ran = true; return "ok"; });
     assert.equal(ran, true);
+  } finally { await worker.close(); }
+});
+
+test("mutateWithLease with runId + invalidateReason flips open reviews to invalidated and raises review-kind attention", async () => {
+  const worker = freshWorker();
+  try {
+    const taskId = await makeTask(worker);
+    const fakeBase = "0123456789abcdef".repeat(4).slice(0, 40);
+    const git = stubGitAdapter({ fakeBaseCommit: fakeBase, fakeHeadRevision: fakeBase, dirty: "" });
+    const prepared = await prepareManagedWorkspace(worker, {
+      taskId, repoDir: "/tmp/repo", baseCommit: fakeBase.slice(0, 7),
+      worktreePath: "/tmp/repo/wt", holder: "controller-A", git,
+    });
+    // Seed one open review on a run for this task.
+    const run = await createRun(worker, { taskId });
+    const verification = await createVerification(worker, {
+      taskId, runId: run.id, command: "c", cwd: "/tmp",
+    });
+    await recordVerificationOutput(worker, verification.id, {
+      exitCode: 0, signal: null, assertionCounts: null,
+      requiredCheckResults: [{ name: "c", status: "passed" }],
+      stdoutTail: "", stderrTail: "", to: "passed",
+    });
+    const review = await createOpenReview(worker, {
+      taskId, runId: run.id, evidenceVerificationIds: [verification.id],
+      candidateBase: fakeBase.slice(0, 7),
+      candidateTree: fakeBase.slice(0, 7),
+      candidateDiff: "d".repeat(64),
+      configurationRevision: "c".repeat(64),
+    });
+    await mutateWithLease(worker, {
+      workspaceId: prepared.workspaceId, holder: "controller-A",
+      fencingToken: prepared.fencingToken,
+      runId: run.id, invalidateReason: "head-advanced",
+    }, async () => undefined);
+    const reloaded = await readReview(worker, review.id);
+    assert.equal(reloaded?.status, "invalidated");
+    const attention = (await listAttention(worker)).filter(item => item.kind === "review");
+    assert.equal(attention.length, 1);
+    assert.equal(attention[0]!.kind, "review");
+    assert.equal(attention[0]!.issueIdentity, `review:${review.id}`);
+  } finally { await worker.close(); }
+});
+
+test("mutateWithLease without runId does not touch reviews", async () => {
+  const worker = freshWorker();
+  try {
+    const taskId = await makeTask(worker);
+    const fakeBase = "0123456789abcdef".repeat(4).slice(0, 40);
+    const git = stubGitAdapter({ fakeBaseCommit: fakeBase, fakeHeadRevision: fakeBase, dirty: "" });
+    const prepared = await prepareManagedWorkspace(worker, {
+      taskId, repoDir: "/tmp/repo", baseCommit: fakeBase.slice(0, 7),
+      worktreePath: "/tmp/repo/wt", holder: "controller-A", git,
+    });
+    const run = await createRun(worker, { taskId });
+    const verification = await createVerification(worker, {
+      taskId, runId: run.id, command: "c", cwd: "/tmp",
+    });
+    await recordVerificationOutput(worker, verification.id, {
+      exitCode: 0, signal: null, assertionCounts: null,
+      requiredCheckResults: [{ name: "c", status: "passed" }],
+      stdoutTail: "", stderrTail: "", to: "passed",
+    });
+    const review = await createOpenReview(worker, {
+      taskId, runId: run.id, evidenceVerificationIds: [verification.id],
+      candidateBase: fakeBase.slice(0, 7),
+      candidateTree: fakeBase.slice(0, 7),
+      candidateDiff: "d".repeat(64),
+      configurationRevision: "c".repeat(64),
+    });
+    await mutateWithLease(worker, {
+      workspaceId: prepared.workspaceId, holder: "controller-A",
+      fencingToken: prepared.fencingToken,
+    }, async () => undefined);
+    const reloaded = await readReview(worker, review.id);
+    assert.equal(reloaded?.status, "open");
   } finally { await worker.close(); }
 });
