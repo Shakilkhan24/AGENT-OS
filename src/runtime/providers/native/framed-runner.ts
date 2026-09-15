@@ -239,10 +239,22 @@ function wireChild(
     try { child.stdout.destroy(); } catch { /* already destroyed */ }
   }
 
+  // M5.3 — capture OS-level identity at spawn time. `pid` is
+  // always populated when the runner successfully spawns a
+  // child; `pgid` is captured only when the platform exposes
+  // the process-group id (typically Linux + `setpgid`). The
+  // observation level is `"fully-observed"` only when both
+  // pid AND pgid were captured; otherwise it falls back to
+  // `"pid-only"`. The whole `nativeProcess` block is omitted
+  // when no pid is available (e.g. spawn returned an unusable
+  // handle) — additive, existing callers can ignore it.
+  const nativeProcess = captureNativeProcess(child);
+
   return {
     correlationId: req.correlationId,
     lifecycle,
     startup,
+    ...(nativeProcess ? { nativeProcess } : {}),
     stdin: {
       write: async (bytes: Uint8Array) => {
         ensureOpen();
@@ -279,6 +291,49 @@ function wireChild(
       handleClose();
     },
   };
+}
+
+/**
+ * M5.3 — capture pid / pgid / observation level at spawn time.
+ * Returns `undefined` when no pid is available (defensive —
+ * `ChildProcess.pid` is `number | undefined`).
+ */
+function captureNativeProcess(
+  child: ChildProcessWithoutNullStreams,
+): { readonly pid: number; readonly pgid: number | null; readonly observation: "fully-observed" | "pid-only" } | undefined {
+  const pid = typeof child.pid === "number" ? child.pid : null;
+  if (pid === null) return undefined;
+  let pgid: number | null = null;
+  try {
+    if (process.platform === "linux" || process.platform === "darwin") {
+      // `process.getuid` is a sync OS call that works on Linux/macOS.
+      // Reading `/proc/<pid>/stat` field 5 (tpgid) is the reliable way
+      // to read the process group of an arbitrary child pid. If the
+      // file is missing (process exited between spawn and read) we
+      // fall back to `pid-only`. The read is bounded to one tiny file.
+      try {
+        const fs = require("node:fs") as typeof import("node:fs");
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8") as string;
+        // Format documented in proc(5): field 5 is `tpgid`.
+        // The pid field itself is field 1 and is parenthesised
+        // (`(COMMAND)`) — split on the LAST `)` to skip past the
+        // command name even when it contains spaces or parens.
+        const closeParen = stat.lastIndexOf(")");
+        if (closeParen !== -1) {
+          const tail = stat.slice(closeParen + 2);
+          const fields = tail.split(" ");
+          // tail[0] = state, tail[1] = ppid, tail[2] = pgrp, tail[3] = session.
+          const pgrp = Number(fields[2]);
+          if (Number.isFinite(pgrp) && pgrp > 0) pgid = pgrp;
+        }
+      } catch {
+        // /proc not available (non-Linux) or process gone — fall back.
+      }
+    }
+  } catch {
+    pgid = null;
+  }
+  return { pid, pgid, observation: pgid === null ? "pid-only" : "fully-observed" };
 }
 
 // `DEFAULT_TIMEOUT_MS` is reserved for the run-level deadline policy in

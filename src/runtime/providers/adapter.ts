@@ -17,6 +17,7 @@
  * native runner requires no change to the orchestration code.
  */
 import { EventEmitter } from "node:events";
+import type { NativeSubagentSupport } from "../../shared/delegation-schema";
 
 export type ProviderKind = "scripted" | "native";
 
@@ -30,6 +31,15 @@ export interface AdapterCapabilities {
   readonly featureCount: number;
   /** ISO timestamp the probe ran at. */
   readonly probedAt: string;
+  /**
+   * M5.3 — additive. Whether this adapter exposes a native
+   * subagent path (a child the provider itself spawns in the
+   * same workspace + host) and the runtime's best-case
+   * observation level for those children. `undefined` means
+   * "not advertised" — the M5.3 dispatcher treats absent as
+   * "no native subagent support".
+   */
+  readonly nativeSubagentSupport?: NativeSubagentSupport;
 }
 
 /** Inputs the orchestrator hands to `spawn`. */
@@ -73,6 +83,20 @@ export interface ProviderHandle {
   readonly exit: (reason: string) => Promise<void>;
   /** Adapter-supplied startup metadata (free-form, opaque JSON). May be `null`. */
   readonly startup: Record<string, unknown> | null;
+  /**
+   * M5.3 — additive. OS-level identity the runner captured at
+   * spawn time. `pid` is always populated when the runner
+   * successfully spawns a child; `pgid` is populated only when
+   * the runner could capture a process-group id (typically
+   * Linux + `setpgid`). The `observation` field is the level
+   * the M5.3 dispatcher reads; existing callers can ignore
+   * this whole field.
+   */
+  readonly nativeProcess?: {
+    readonly pid: number;
+    readonly pgid: number | null;
+    readonly observation: "fully-observed" | "pid-only";
+  };
 }
 
 export interface ProviderAdapter {

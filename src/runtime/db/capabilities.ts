@@ -20,6 +20,7 @@ import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { extendNativeCapabilities } from "../providers/capability-matrix";
+import { nativeSubagentSupportSchema } from "../../shared/delegation-schema";
 
 /** Discriminated capability set returned by the probe. */
 export const capabilityMatrixSchema = z.object({
@@ -33,14 +34,26 @@ export const capabilityMatrixSchema = z.object({
   /** Native provider capabilities — version-aware as of M3b. */
   native: z.union([
     // Legacy shape (M3a): keep accepting `{claude, codex}` for back-compat
-    // with existing test overrides.
-    z.object({ claude: z.boolean(), codex: z.boolean() }).strict(),
-    // Current shape: version-aware.
+    // with existing test overrides. The M5.3 `nativeSubagentSupport`
+    // field is OPTIONAL on the legacy shape so existing test
+    // overrides keep passing without modification.
+    z.object({
+      claude: z.boolean(),
+      codex: z.boolean(),
+      nativeSubagentSupport: nativeSubagentSupportSchema.optional(),
+    }).strict(),
+    // Current shape: version-aware. The M5.3 `nativeSubagentSupport`
+    // field carries the dispatcher's per-provider input. It is
+    // optional so test stubs that pre-date M5.3 keep passing;
+    // absent ⇒ `{supported: false, defaultObservation: "pid-only",
+    // capturesPgid: false}` per the M4.1 asymmetry note (the
+    // safe default is "no native subagent support").
     z.object({
       claude: z.boolean(),
       codex: z.boolean(),
       version: z.string().nullable(),
       featureCount: z.number().int().min(0),
+      nativeSubagentSupport: nativeSubagentSupportSchema.optional(),
     }).strict(),
   ]),
   /** Restrictions the current host can enforce (process-wide). */

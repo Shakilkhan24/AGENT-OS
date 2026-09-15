@@ -69,6 +69,15 @@ function probeCodexBinary(adapterPath: string, baseVersion: string | null): Adap
     version: baseVersion,
     featureCount: 4,
     probedAt: new Date().toISOString(),
+    // M5.3 — additive. Codex does NOT advertise native subagent
+    // support (M4.1's documented asymmetry); the M5.3 dispatcher
+    // therefore routes codex dispatches through the managed-run
+    // path. `defaultObservation: "pid-only"` is best-case.
+    nativeSubagentSupport: {
+      supported: false,
+      defaultObservation: "pid-only",
+      capturesPgid: false,
+    },
   };
 }
 

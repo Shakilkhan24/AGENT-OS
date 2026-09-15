@@ -9,9 +9,16 @@
  * Unknown / missing binaries degrade visibly: `version: null`,
  * `featureCount: 0`. The probe is read-only (no `npm install`-style
  * mutation) and never caches across calls.
+ *
+ * M5.3 — additive. The returned matrix also carries
+ * `nativeSubagentSupport`: claude advertises a fully-observed
+ * subagent path; codex does NOT (M4.1 asymmetry). The runtime's
+ * dispatcher (`runtime/orchestration/delegation-policy.ts`) reads
+ * this field.
  */
 import { spawnSync } from "node:child_process";
 import type { CapabilityMatrix } from "../db/capabilities";
+import type { NativeSubagentSupport } from "../../shared/delegation-schema";
 
 /** Native matrix extension returned by `extendNativeCapabilities`. */
 export interface ExtendedNativeMatrix {
@@ -19,6 +26,12 @@ export interface ExtendedNativeMatrix {
   readonly codex: boolean;
   readonly version: string | null;
   readonly featureCount: number;
+  /**
+   * M5.3 — additive. Whether the native provider advertises a
+   * subagent path the dispatcher can route through.
+   * `supported: false` ⇒ the dispatcher forces managed-run
+   * (no native-subagent shortcut). */
+  readonly nativeSubagentSupport: NativeSubagentSupport;
 }
 
 /** Test seam: replace the version probe for the lifetime of a test. */
@@ -42,8 +55,9 @@ export function resetVersionProbe(): void { versionProbe = defaultVersionProbe; 
 
 /**
  * Probe the native provider capabilities on top of `matrix.installed`.
- * Returns `{claude, codex, version, featureCount}`. Missing binaries →
- * `{false, version: null, featureCount: 0}`.
+ * Returns `{claude, codex, version, featureCount, nativeSubagentSupport}`.
+ * Missing binaries →
+ * `{false, version: null, featureCount: 0, nativeSubagentSupport: {supported: false, …}}`.
  */
 export function extendNativeCapabilities(matrix: CapabilityMatrix): ExtendedNativeMatrix {
   const claudeAvailable = matrix.installed.node && canFindBinary("claude");
@@ -52,11 +66,17 @@ export function extendNativeCapabilities(matrix: CapabilityMatrix): ExtendedNati
   const codexVersion = codexAvailable ? versionProbe("codex") : null;
   const version = claudeVersion ?? codexVersion;
   const featureCount = (claudeVersion ? 5 : 0) + (codexVersion ? 4 : 0);
+  // M5.3 — claude = fully-observed native subagent path; codex
+  // does NOT advertise subagent support (M4.1 asymmetry).
+  const nativeSubagentSupport: NativeSubagentSupport = claudeVersion
+    ? { supported: true, defaultObservation: "fully-observed", capturesPgid: true }
+    : { supported: false, defaultObservation: "pid-only", capturesPgid: false };
   return {
     claude: Boolean(claudeVersion),
     codex: Boolean(codexVersion),
     version,
     featureCount,
+    nativeSubagentSupport,
   };
 }
 

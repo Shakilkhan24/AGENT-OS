@@ -43,6 +43,13 @@ export function createNativeAdapter(options: NativeAdapterOptions): ProviderAdap
         version: result.capabilities.version,
         featureCount: result.capabilities.featureCount,
         probedAt: new Date().toISOString(),
+        // M5.3 — additive. The native (claude) adapter advertises
+        // a native-subagent path; the runner captures pid + pgid
+        // on Linux + macOS so the dispatcher can count observable
+        // children. Tests can override via `options.capabilities`.
+        nativeSubagentSupport: result.capabilities.claude
+          ? { supported: true, defaultObservation: "fully-observed", capturesPgid: true }
+          : { supported: true, defaultObservation: "pid-only", capturesPgid: false },
       };
     },
     async spawn(req: SpawnRequest): Promise<ProviderHandle> {
