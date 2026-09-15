@@ -184,7 +184,7 @@ export interface API {
     id: string,
     to: "seen" | "snoozed" | "dismissed" | "resolved",
   ): Promise<{
-    id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop";
+    id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop" | "hook-failure";
     issueIdentity: string; revision: number;
     state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
     payloadJson: string; snoozedUntil: string | null;
@@ -199,7 +199,7 @@ export interface API {
     id: string,
     until: string,
   ): Promise<{
-    id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop";
+    id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop" | "hook-failure";
     issueIdentity: string; revision: number;
     state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
     payloadJson: string; snoozedUntil: string | null;
@@ -261,14 +261,14 @@ export interface API {
     input: { reply: string; answeredBy: string },
   ): Promise<{
     resolved: {
-      id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop";
+      id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop" | "hook-failure";
       issueIdentity: string; revision: number;
       state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
       payloadJson: string; snoozedUntil: string | null;
       createdAt: string; updatedAt: string;
     };
     followUp: {
-      id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop";
+      id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop" | "hook-failure";
       issueIdentity: string; revision: number;
       state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
       payloadJson: string; snoozedUntil: string | null;

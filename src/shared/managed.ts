@@ -250,7 +250,7 @@ export type ArtifactReference = z.infer<typeof artifactReferenceSchema>;
 
 // ── AttentionItem ────────────────────────────────────────────────────────────
 
-export const attentionKindSchema = z.enum(["decision", "conflict", "review", "stop"]);
+export const attentionKindSchema = z.enum(["decision", "conflict", "review", "stop", "hook-failure"]);
 export type AttentionKind = z.infer<typeof attentionKindSchema>;
 
 export const attentionStateSchema = z.enum(["new", "seen", "snoozed", "dismissed", "resolved"]);

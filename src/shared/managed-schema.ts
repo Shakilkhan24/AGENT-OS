@@ -93,7 +93,7 @@ export const transitionAttentionInputSchema = z.tuple([
 export const transitionAttentionResultSchema = z.object({
   id: z.string().uuid(),
   taskId: z.string().uuid().nullable(),
-  kind: z.enum(["decision", "conflict", "review", "stop"]),
+  kind: z.enum(["decision", "conflict", "review", "stop", "hook-failure"]),
   issueIdentity: z.string().min(1).max(256),
   revision: z.number().int().min(0).max(1024),
   state: z.enum(["new", "seen", "snoozed", "dismissed", "resolved"]),
