@@ -80,11 +80,24 @@ export async function spawnFramedRunner(
     resume: () => { child.stdout.resume(); },
   });
 
+  // M4.1: a mutable startup envelope that the started-frame handler
+  // can populate with adapter-supplied metadata (e.g. `scheme: "codex"`,
+  // `bidirectionalInput: false`). The default mirrors the previous
+  // shape; the started-frame handler merges in `metadata` when present.
+  const startup: Record<string, unknown> = { kind: "native-framed", correlationId: req.correlationId };
+
   const decoder = new FrameDecoder((value: unknown) => {
     if (!value || typeof value !== "object") return;
     const v = value as Record<string, unknown>;
     if (v.kind === "started") {
       emit({ kind: "started", at: String(v.at ?? new Date().toISOString()) });
+      // M4.1: surface the adapter's startup metadata (e.g. codex
+      // declares `scheme: "codex"` and `bidirectionalInput: false`).
+      // The Claude stub does not emit metadata, so this stays `null`
+      // for the existing path — no breaking change.
+      if (v.metadata && typeof v.metadata === "object") {
+        (startup as Record<string, unknown>).metadata = v.metadata;
+      }
       return;
     }
     if (v.kind === "output") {
@@ -137,7 +150,7 @@ export async function spawnFramedRunner(
   return {
     correlationId: req.correlationId,
     lifecycle,
-    startup: { kind: "native-framed", correlationId: req.correlationId },
+    startup,
     stdin: {
       write: async (bytes: Uint8Array) => {
         ensureOpen();
