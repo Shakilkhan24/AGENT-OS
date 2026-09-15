@@ -11,6 +11,7 @@ import { AppError } from "../../../shared/errors";
 import type { ProviderAdapter, AdapterCapabilities } from "../adapter";
 import { verifyOwnership } from "./ownership-contract";
 import { spawnFramedRunner } from "./framed-runner";
+import type { ProviderConfig } from "../config-translator";
 import { probeCapabilities } from "../../db/capabilities";
 import type { SpawnRequest, ProviderHandle } from "../adapter";
 
@@ -19,6 +20,13 @@ export interface NativeAdapterOptions {
   readonly adapterPath: string;
   /** Capability override for tests. */
   readonly capabilities?: AdapterCapabilities;
+  /**
+   * M4.5: provider-native configuration translation. See
+   * `runtime/providers/config-translator.ts`. Threaded through to
+   * `spawnFramedRunner` so the adapter argv is observable through
+   * tests. Optional: omitting preserves M4.1 behaviour.
+   */
+  readonly providerProfile?: ProviderConfig;
 }
 
 export function createNativeAdapter(options: NativeAdapterOptions): ProviderAdapter {
@@ -41,7 +49,9 @@ export function createNativeAdapter(options: NativeAdapterOptions): ProviderAdap
       const caps = await probeCapabilities();
       const result = verifyOwnership(adapterPath, caps);
       if (!result.ok) throw new AppError("UNAVAILABLE", result.message);
-      return spawnFramedRunner(adapterPath, req);
+      return spawnFramedRunner(adapterPath, req, {
+        providerProfile: options.providerProfile,
+      });
     },
   };
 }

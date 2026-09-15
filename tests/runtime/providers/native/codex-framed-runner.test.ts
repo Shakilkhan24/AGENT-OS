@@ -25,6 +25,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnFramedRunner } from "../../../../src/runtime/providers/native/framed-runner";
 import type { SpawnRequest, ProviderHandle } from "../../../../src/runtime/providers/adapter";
+import { AppError } from "../../../../src/shared/errors";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..", "..", "..");
@@ -87,4 +88,33 @@ test("claude stub does NOT populate startup.metadata (existing path unchanged)",
   assert.equal(handle.startup?.metadata, undefined);
   handle.stdin.close();
   await handle.exit("test-done");
+});
+
+test("M4.5: bad providerProfile envOverride exits the runner with a structured INVALID_REQUEST error", async () => {
+  // The runner's translation branch catches the AppError thrown
+  // by `translateProviderConfig`, emits it on the lifecycle, and
+  // returns a synthetic handle whose `startup.translationError`
+  // carries the failure code. We assert that contract here
+  // without spawning a real child.
+  const handle = await spawnFramedRunner(
+    claudeStub,
+    newRequest("claude-0.0.1"),
+    {
+      command: { binary: process.execPath, args: [claudeStub] },
+      providerProfile: {
+        binaryArgs: [],
+        // LD_PRELOAD is the canonical loader-injection vector.
+        envOverrides: { LD_PRELOAD: "/tmp/evil.so" },
+        workingDirectory: null,
+      },
+    },
+  );
+  assert.equal(handle.startup?.kind, "native-framed");
+  assert.equal(handle.startup?.translationError, "INVALID_REQUEST");
+  const error = await new Promise<AppError>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timed out waiting for error event")), 1_000);
+    handle.lifecycle.on("error", (e) => { clearTimeout(timer); resolve(e as AppError); });
+  });
+  assert.ok(error instanceof AppError);
+  assert.equal(error.failure.code, "INVALID_REQUEST");
 });

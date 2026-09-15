@@ -26,6 +26,7 @@ import { statSync } from "node:fs";
 import { AppError } from "../../shared/errors";
 import type { ProviderAdapter, AdapterCapabilities, SpawnRequest, ProviderHandle } from "./adapter";
 import { spawnFramedRunner } from "./native/framed-runner";
+import type { ProviderConfig } from "./config-translator";
 import { probeCapabilities } from "../db/capabilities";
 
 export interface CodexNativeAdapterOptions {
@@ -33,6 +34,14 @@ export interface CodexNativeAdapterOptions {
   readonly adapterPath: string;
   /** Capability snapshot override for tests. */
   readonly capabilities?: AdapterCapabilities;
+  /**
+   * M4.5: provider-native configuration translation. When
+   * supplied, the framed runner translates the config into
+   * explicit argv and merges `envOverrides` on top of `process.env`
+   * for the child. When omitted (the M4.1 default), the runner
+   * spawns the codex adapter with the original behaviour.
+   */
+  readonly providerProfile?: ProviderConfig;
 }
 
 /**
@@ -107,7 +116,9 @@ export function createCodexNativeAdapter(options: CodexNativeAdapterOptions): Pr
           `Codex adapter at ${adapterPath} cannot be spawned (binary missing or version unknown)`,
         );
       }
-      return spawnFramedRunner(adapterPath, req);
+      return spawnFramedRunner(adapterPath, req, {
+        providerProfile: options.providerProfile,
+      });
     },
   };
 }

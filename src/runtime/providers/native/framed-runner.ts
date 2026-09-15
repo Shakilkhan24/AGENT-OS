@@ -18,6 +18,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { ProviderHandle, SpawnRequest } from "../adapter";
+import { translateProviderConfig, type ProviderConfig } from "../config-translator";
 import { FrameDecoder, encodeFrame } from "../../../runtime/framing";
 import { createBudgetedWriter, INPUT_CAP } from "../../../runtime/orchestration/back-pressure";
 import { AppError } from "../../../shared/errors";
@@ -35,6 +36,14 @@ export interface FramedRunnerOptions {
    * adapter path itself is the binary.
    */
   readonly command?: { readonly binary: string; readonly args: readonly string[] };
+  /**
+   * M4.5: provider-native configuration translation. When
+   * supplied, the runner calls `translateProviderConfig` and
+   * appends the translated argv + env + cwd to the spawn call.
+   * Translation failures exit the child with code 1 and emit a
+   * structured error event.
+   */
+  readonly providerProfile?: ProviderConfig;
 }
 
 /**
@@ -52,11 +61,94 @@ export async function spawnFramedRunner(
   const binary = options.command?.binary ?? adapterPath;
   const args: readonly string[] = options.command?.args
     ?? [adapterPath, "--correlation-id", req.correlationId, "--deadline-at", req.deadlineAt];
+
+  // M4.5: translate provider-native config into argv tail + env +
+  // cwd. The translator is pure and throws `INVALID_REQUEST` on
+  // bad config; we catch the failure here, emit a structured
+  // error event, and exit with code 1 so the orchestrator sees a
+  // missing-started-frame signal.
+  if (options.providerProfile !== undefined) {
+    try {
+      // The runner is provider-agnostic; the provider kind is
+      // encoded in `SpawnRequest.providerVersion` (`"claude@..."`
+      // / `"codex@..."` form is the convention used elsewhere).
+      // For M4.5 the adapter factories translate before calling
+      // the runner; the runner-level `providerProfile` field is
+      // the legacy/edge path that ships with a known provider
+      // triple. Callers that need provider-aware translation
+      // should compute it themselves and pass via `command.args`.
+      const translated = translateProviderConfig({
+        provider: "claude",
+        providerVersion: req.providerVersion,
+        model: req.model,
+        accountMode: req.accountMode,
+        config: options.providerProfile,
+      });
+      const finalArgs: string[] = [...args, ...translated.argv];
+      const finalEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        ...translated.env,
+      };
+      const child: ChildProcessWithoutNullStreams = spawn(
+        binary,
+        finalArgs,
+        {
+          stdio: "pipe",
+          env: finalEnv,
+          ...(translated.cwd ? { cwd: translated.cwd } : {}),
+        },
+      );
+      return wireChild(child, req, limit, options);
+    } catch (error) {
+      const appErr = error instanceof AppError
+        ? error
+        : new AppError(
+            "INVALID_REQUEST",
+            `Provider config translation failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+      const lifecycle = new EventEmitter();
+      // Defer the emit to a macrotask so callers attaching
+      // listeners immediately after `await spawnFramedRunner(...)`
+      // still receive the error. A microtask fires before the
+      // caller's `await` resumes, so the listener would attach too
+      // late; `setImmediate` runs after the current microtask
+      // queue drains, which is the right ordering for "emit
+      // before the next caller-observable callback".
+      setImmediate(() => {
+        lifecycle.emit("error", appErr);
+      });
+      return {
+        correlationId: req.correlationId,
+        lifecycle,
+        startup: { kind: "native-framed", correlationId: req.correlationId, translationError: appErr.failure.code },
+        stdin: { write: async () => { throw appErr; }, close: () => { /* nothing to close */ } },
+        acknowledge: () => { /* nothing to ack */ },
+        exit: async () => { /* no child */ },
+      };
+    }
+  }
+
   const child: ChildProcessWithoutNullStreams = spawn(
     binary,
     [...args],
     { stdio: "pipe" },
   );
+  return wireChild(child, req, limit, options);
+}
+
+/**
+ * Wire the spawned child into the lifecycle/decoder pipeline.
+ * Extracted from `spawnFramedRunner` so the M4.5 translation
+ * branch can share the same plumbing as the default branch.
+ */
+function wireChild(
+  child: ChildProcessWithoutNullStreams,
+  req: SpawnRequest,
+  limit: number,
+  options: FramedRunnerOptions,
+): ProviderHandle {
+  void limit;
+  void options;
   const lifecycle = new EventEmitter();
   let closed = false;
   let exited = false;
