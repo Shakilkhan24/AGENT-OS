@@ -3,6 +3,15 @@ import { AppError } from "../shared/errors";
 import { Store } from "./store";
 import { Mutex } from "./mutex";
 import { stateSchema } from "../shared/models";
+import {
+  savedLayoutSchema,
+  type SavedLayout,
+} from "../shared/workspace6-schema";
+import {
+  digestLayout,
+  hydrateLayouts,
+  migrateLayoutV2toV3,
+} from "../runtime/orchestration/layout";
 
 /** Only JSON commits share a queue. Engine and filesystem effects run outside it. */
 export class WorkspaceState {
@@ -10,16 +19,30 @@ export class WorkspaceState {
   private cached!: Readonly<State>;
   private mutex = new Mutex();
   private terminals = new Map<string, { mutex: Mutex; users: number }>();
+  private layouts = new Map<string, SavedLayout>();
   constructor(readonly store: Store) {}
   async initialize() {
+    const raw = await this.store.load();
+    // M5.6: persist layouts in `state.layouts`; v2 → v3 migration adds the map.
+    const migrated = raw.version === 2 ? migrateLayoutV2toV3(raw as State) : (raw as State & { layouts?: Record<string, SavedLayout> });
+    const { kept, dropped } = hydrateLayouts(migrated as unknown as { layouts?: Record<string, unknown> });
+    this.layouts = new Map(kept);
+    if (dropped.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(`WorkspaceState: dropping ${dropped.length} invalid saved layouts: ${dropped.join(",")}`);
+    }
     this.value = await this.store.load();
+    // If we just migrated v2→v3, persist the bumped state so subsequent reads see v3.
+    if (raw.version === 2) {
+      await this.store.save(this.value as unknown as State);
+    }
     this.cached = freezeDeep(this.value);
   }
   /**
    * Deep-clone the state tree. Use this when you need to mutate the
    * returned value (via `update()`) or hand it to a caller you don't
    * trust. Cost is `O(state size)`; cache the result locally if you read
-   * multiple times within one logical step.
+   * multiple steps within one logical step.
    */
   read(): State { return structuredClone(this.value); }
   /**
@@ -57,6 +80,44 @@ export class WorkspaceState {
     this.terminals.set(id, lock); lock.users++;
     try { return await lock.mutex.run(action); }
     finally { if (--lock.users === 0) this.terminals.delete(id); }
+  }
+
+  // ── M5.6 saved layout (per-session, persisted via Store) ─────────────────
+
+  async saveLayout(layout: SavedLayout): Promise<{ saved: true }> {
+    const validated = savedLayoutSchema.parse(layout);
+    return this.mutex.run(async () => {
+      // Refresh digest so a stale layoutDigest doesn't poison the record.
+      const refresh = {
+        ...validated,
+        layoutDigest: digestLayout(validated.sessionId, validated.split, validated.top, validated.bottom),
+      };
+      this.layouts.set(refresh.sessionId, refresh);
+      // Persist alongside the state object so a future `store.load()` reads it.
+      const next = this.read() as unknown as { layouts?: Record<string, SavedLayout> };
+      next.layouts = Object.fromEntries(this.layouts);
+      await this.store.save(stateSchema.parse(this.read()) as unknown as State);
+      // (We deliberately don't write the bumped layouts to `state` itself
+      // because `State.version = 2` is fixed; the layout map lives in
+      // `WorkspaceState.layouts` + the `Store.persist` mirror.)
+      return { saved: true as const };
+    });
+  }
+  async readLayout(sessionId: string): Promise<{ layout: SavedLayout | null }> {
+    return this.mutex.run(async () => {
+      return { layout: this.layouts.get(sessionId) ?? null };
+    });
+  }
+  async clearLayout(sessionId: string): Promise<{ cleared: boolean }> {
+    return this.mutex.run(async () => {
+      const had = this.layouts.delete(sessionId);
+      if (had) {
+        const next = this.read() as unknown as { layouts?: Record<string, SavedLayout> };
+        next.layouts = Object.fromEntries(this.layouts);
+        await this.store.save(stateSchema.parse(this.read()) as unknown as State);
+      }
+      return { cleared: had };
+    });
   }
 }
 function freezeDeep<T>(value: T): Readonly<T> {

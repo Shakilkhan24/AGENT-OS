@@ -16,6 +16,19 @@ import { Reconciler } from "./reconciler";
 import { LaunchCoordinator } from "./launch-coordinator";
 import { StopCoordinator } from "./stop-coordinator";
 import { log } from "./logging";
+import {
+  type ClearLayoutResult,
+  type ReadLayoutResult,
+  type SaveLayoutResult,
+  type SavedLayout,
+  type SessionMetadataPatch,
+  type UpdateSessionMetadataResult,
+  clearLayoutResultSchema,
+  readLayoutResultSchema,
+  saveLayoutResultSchema,
+  savedLayoutSchema,
+  updateSessionMetadataResultSchema,
+} from "../shared/workspace6-schema";
 
 /** Public application facade; focused services own persistence, launch and engine observation. */
 export class SessionService {
@@ -123,14 +136,54 @@ export class SessionService {
     return this.snapshot();
   }
   async saveEnvProfiles(profiles: EnvProfile[]) {
-    profiles = z.array(envProfileSchema).max(100).parse(profiles); this.unique(profiles);
+    profiles = z.array(envProfileSchema).min(1).max(100).parse(profiles); this.unique(profiles);
     await this.state.update(state => { state.envProfiles = profiles; });
     return this.snapshot();
   }
+  async saveEnvProfilesResult(profiles: EnvProfile[]): Promise<{ count: number }> {
+    profiles = z.array(envProfileSchema).min(1).max(100).parse(profiles); this.unique(profiles);
+    await this.state.update(state => { state.envProfiles = profiles; });
+    return { count: profiles.length };
+  }
   async saveHooks(hooks: Hook[]) {
-    hooks = z.array(hookSchema).max(100).parse(hooks); this.unique(hooks);
+    hooks = z.array(hookSchema).min(1).max(100).parse(hooks); this.unique(hooks);
     await this.state.update(state => { state.hooks = hooks; });
     return this.snapshot();
+  }
+  async saveHooksResult(hooks: Hook[]): Promise<{ count: number }> {
+    hooks = z.array(hookSchema).min(1).max(100).parse(hooks); this.unique(hooks);
+    await this.state.update(state => { state.hooks = hooks; });
+    return { count: hooks.length };
+  }
+  // ── M5.6: partial session-metadata PATCH (returns {applied, metadata}) ──
+  async updateSessionMetadataPatch(sessionId: string, patch: SessionMetadataPatch): Promise<UpdateSessionMetadataResult> {
+    const session = findSession(this.state.read(), sessionId);
+    const current = session.metadata ?? sessionMetadataSchema.parse({});
+    const merged = sessionMetadataSchema.parse({ ...current, ...patch });
+    await this.state.update(state => { findSession(state, sessionId).metadata = merged; });
+    await this.events.publish({ type: "session-changed", sourceId: "sessions", sessionId, data: { action: "updated" } });
+    return updateSessionMetadataResultSchema.parse({ sessionId, applied: true, metadata: merged });
+  }
+  // ── M5.6: per-session saved layout ──────────────────────────────────────
+  async saveLayout(layout: SavedLayout): Promise<SaveLayoutResult> {
+    const parsed = savedLayoutSchema.parse(layout);
+    // Validate ratio + non-empty panes.
+    if (parsed.split.ratio < 0.1 || parsed.split.ratio > 0.9) {
+      throw new AppError("INVALID_REQUEST", "layout.split.ratio must be in [0.1, 0.9]");
+    }
+    if (parsed.split.enabled && parsed.top.activeTerminalId == null && parsed.bottom.activeTerminalId == null) {
+      throw new AppError("INVALID_REQUEST", "at least one pane must have an activeTerminalId");
+    }
+    await this.state.saveLayout(parsed);
+    return saveLayoutResultSchema.parse({ saved: true });
+  }
+  async readLayout(sessionId: string): Promise<ReadLayoutResult> {
+    const out = await this.state.readLayout(sessionId);
+    return readLayoutResultSchema.parse(out);
+  }
+  async clearLayout(sessionId: string): Promise<ClearLayoutResult> {
+    const out = await this.state.clearLayout(sessionId);
+    return clearLayoutResultSchema.parse(out);
   }
   private unique(items: { id: string }[]) {
     if (new Set(items.map(item => item.id)).size !== items.length) throw new AppError("INVALID_REQUEST", "Record IDs must be unique");

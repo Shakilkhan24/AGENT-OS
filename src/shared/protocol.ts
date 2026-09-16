@@ -23,6 +23,18 @@ import { executeVerificationInputSchema, executeVerificationResultSchema,
   continueInvocationInputSchema, continueInvocationResultSchema,
   newAttemptInputSchema, newAttemptResultSchema,
   requestStopInputSchema, requestStopResultSchema } from "./managed-schema";
+import {
+  clearLayoutInputSchema, clearLayoutResultSchema,
+  deleteTerminalHistoryInputSchema, deleteTerminalHistoryResultSchema,
+  hideTerminalInputSchema, hideTerminalResultSchema,
+  readLayoutInputSchema, readLayoutResultSchema,
+  saveEnvProfilesInputSchema, saveEnvProfilesResultSchema,
+  saveHooksInputSchema, saveHooksResultSchema,
+  saveLayoutInputSchema, saveLayoutResultSchema,
+  stopAndRemoveTerminalInputSchema, stopAndRemoveTerminalResultSchema,
+  updateSessionMetadataInputSchema, updateSessionMetadataResultSchema,
+  viewSessionMemoryInputSchema, viewTaskMemoryInputSchema, viewTerminalMemoryInputSchema,
+} from "./workspace6-schema";
 
 export const API_VERSION = 1;
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024;
@@ -105,6 +117,34 @@ export const methods = {
   "continue-invocation": method(continueInvocationInputSchema, continueInvocationResultSchema, MAX_DEADLINE_MS),
   "new-attempt": method(newAttemptInputSchema, newAttemptResultSchema, MAX_DEADLINE_MS),
   "request-stop": method(requestStopInputSchema, requestStopResultSchema),
+  // M5.6 — per-session metadata patch + env-profile / hook / memory IPC.
+  // The renderer can keep using `Snapshot` for the legacy read paths; the
+  // new IPC methods below let the M5.6 command palette + project-metadata
+  // UI surface the same records without round-tripping through the legacy
+  // `savePresets` IPC. Object payloads are wrapped in a single-element
+  // tuple (matches the M3c.5 convention used by `continue-invocation`).
+  "update-session-metadata": method(z.tuple([updateSessionMetadataInputSchema]), updateSessionMetadataResultSchema),
+  "save-env-profiles": method(z.tuple([saveEnvProfilesInputSchema]), saveEnvProfilesResultSchema),
+  "save-hooks": method(z.tuple([saveHooksInputSchema]), saveHooksResultSchema),
+  // M5.6 — bounded memory-view IPC. The runtime validates and caps the
+  // response (see `MEMORY_VIEW_MAX_*` in `runtime/db/memory-views.ts`),
+  // so we declare the response as `z.unknown()` and let the runtime
+  // layer's runtime result map back to its declared shape. The
+  // view-function side of the IPC accepts the input via the workspace6
+  // schema above; the response shape is governed by the runtime.
+  "view-session-memory": method(z.tuple([viewSessionMemoryInputSchema]), z.unknown(), 5000),
+  "view-terminal-memory": method(z.tuple([viewTerminalMemoryInputSchema]), z.unknown(), 5000),
+  "view-task-memory": method(z.tuple([viewTaskMemoryInputSchema]), z.unknown(), 5000),
+  // M5.6 — saved layout per sessionId.
+  "save-layout": method(z.tuple([saveLayoutInputSchema]), saveLayoutResultSchema),
+  "read-layout": method(z.tuple([readLayoutInputSchema]), readLayoutResultSchema),
+  "clear-layout": method(z.tuple([clearLayoutInputSchema]), clearLayoutResultSchema),
+  // M5.6 — explicit terminal lifecycle (hide / stop-and-remove /
+  // delete-history). The renderer's `TerminalPanel` invokes one of
+  // these instead of the legacy `delete-terminal` policy.
+  "hide-terminal": method(z.tuple([hideTerminalInputSchema]), hideTerminalResultSchema),
+  "stop-and-remove-terminal": method(z.tuple([stopAndRemoveTerminalInputSchema]), stopAndRemoveTerminalResultSchema, MAX_DEADLINE_MS),
+  "delete-terminal-history": method(z.tuple([deleteTerminalHistoryInputSchema]), deleteTerminalHistoryResultSchema, MAX_DEADLINE_MS),
 } as const;
 export type Method = keyof typeof methods;
 export type RequestArgs<M extends Method> = z.output<(typeof methods)[M]["request"]>;
