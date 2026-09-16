@@ -33,6 +33,8 @@ import { z } from "zod";
 import { AppError } from "../../shared/errors";
 import type { DbWorker } from "./worker";
 import { stableStringify } from "./effective-settings";
+import { latestPromptAnchor, resolvePromptAnchorSettings, type PromptAnchorSettings } from "../orchestration/prompt-anchor";
+import type { PromptAnchor } from "../../shared/prompt-anchor-schema";
 import { taskRowSchema, runRowSchema, invocationRowSchema, artifactReferenceRowSchema, attentionItemRowSchema, terminalRowSchema } from "./schema";
 import { listContextImportsForRun } from "./context-import";
 import { listRevisionUpdates } from "./revision-update";
@@ -253,11 +255,13 @@ export interface TerminalMemoryData {
     readonly originHookId: string | null;
   };
   readonly lines: ReadonlyArray<TerminalHistoryLine>;
+  /** M5.7 — latest literal prompt-anchor detected in the bounded window, or `null`. */
+  readonly promptAnchor: PromptAnchor | null;
 }
 
 export function viewTerminalMemory(
   worker: DbWorker,
-  input: { terminalUuid: string; maxLines?: number },
+  input: { terminalUuid: string; maxLines?: number; promptAnchorSettings?: Partial<PromptAnchorSettings> },
 ): MemoryView<TerminalMemoryData> {
   if (input.terminalUuid.length === 0 || input.terminalUuid.length > 256) {
     throw new AppError("INVALID_REQUEST", "terminalUuid must be 1..256 characters");
@@ -272,6 +276,8 @@ export function viewTerminalMemory(
   }
   const terminal = parseTerminalRow(row);
   const lines = listTerminalHistory(worker, input.terminalUuid, cap.maxLines);
+  const anchorSettings = resolvePromptAnchorSettings(input.promptAnchorSettings ?? {});
+  const promptAnchor = latestPromptAnchor(input.terminalUuid, lines, anchorSettings);
   const data: TerminalMemoryData = {
     terminalUuid: input.terminalUuid,
     terminal: {
@@ -290,6 +296,7 @@ export function viewTerminalMemory(
       originHookId: terminal.origin_hook_id,
     },
     lines,
+    promptAnchor,
   };
   return {
     kind: "terminal",
