@@ -365,3 +365,43 @@ function buildIdempotencyKey(prefix: string, runId: string, attentionId: string,
   if (trimmed.length <= 256) return trimmed;
   return trimmed.slice(0, 256);
 }
+
+// ── M5.5 re-exports ──────────────────────────────────────────────────────────
+// The M5.5 attachment registry is consumed by the M5.1 facade in a future
+// transport-wiring increment; expose it here so the seam is a single
+// import path. Schema imports keep the trust model co-located with the
+// runtime orchestration surface.
+
+export {
+  createAttachmentRegistry,
+  DEFAULT_OBSERVER_BYTE_CREDITS,
+  DEFAULT_OWNER_BYTE_CREDITS,
+  REPLAY_BUFFER_BYTES,
+  OWNERSHIP_HANDOVER_TIMEOUT_MS,
+  SUBSCRIPTION_ROW_META_PREFIX,
+  OWNERSHIP_ROW_META_PREFIX,
+  ABANDONED_ROW_META_PREFIX,
+  registerAttachmentInputSchema,
+  subscriptionStateSchema,
+  publishOutputInputSchema,
+  requestResizeInputSchema,
+  sendInputInputSchema,
+  transferOwnershipInputSchema,
+  acknowledgeOutputInputSchema,
+  unregisterAttachmentInputSchema,
+  replenishByteCreditsInputSchema,
+  attachmentRegistryStatusSchema,
+} from "./attachment-registry";
+export type {
+  AttachmentRegistry,
+  AttachmentRegistryDeps,
+  RegisterResult,
+  UnregisterResult,
+  PublishResult,
+  ResizeResult,
+  SendInputResult,
+  TransferResult,
+  AcknowledgeResult,
+  ReplenishResult,
+  HandoverResult,
+} from "./attachment-registry";
