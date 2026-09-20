@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { AppError } from "../../src/shared/errors";
 import { launchRuntime } from "../../src/main/runtime-launcher";
-import { profilePaths } from "../../src/main/profile-runtime";
+import { isolatedRuntimePaths } from "../support";
 import { ControlClient } from "../../src/runtime/control-client";
 
 async function hasTmux(): Promise<boolean> {
@@ -43,7 +43,7 @@ test("runtime_lock.py exits 73 on duplicate owner", async t => {
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-deploy-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await chmod(paths.parent, 0o700);
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
@@ -56,6 +56,12 @@ test("runtime_lock.py exits 73 on duplicate owner", async t => {
   const entry = path.resolve("dist/runtime/index.cjs");
   const firstArgs = [helper, paths.lock, process.execPath, entry, paths.socket, dataDir, paths.runtime, path.resolve("dist/helpers")];
   const firstChild = spawn("python3", firstArgs, { env: { ...process.env, MINIMAL_DATA_DIR: dataDir, ELECTRON_RUN_AS_NODE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  firstChild.stdout.resume(); firstChild.stderr.resume();
+  t.after(async () => {
+    if (firstChild.exitCode === null && firstChild.signalCode === null) {
+      const exited = once(firstChild, "exit"); firstChild.kill("SIGKILL"); await exited;
+    }
+  });
   const readyDeadline = Date.now() + 10_000;
   while (Date.now() < readyDeadline) {
     try {
@@ -80,7 +86,7 @@ test("the runtime entrypoint refuses to listen on a shared socket directory", as
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-deploy-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   await mkdir(paths.parent, { recursive: true, mode: 0o755 });
   await chmod(paths.parent, 0o755);
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
@@ -94,13 +100,13 @@ test("the runtime entrypoint refuses to listen on a shared socket directory", as
   assert.match(stderr, /not private|UNAVAILABLE/);
 });
 
-test("SIGKILL preserves the OS lock inode and persisted workspace state", { timeout: 30000 }, async t => {
+test("SIGKILL permits a new owner to recover the same profile and lock inode", { timeout: 30000 }, async t => {
   if (!await hasTmux()) { t.skip("tmux not installed"); return; }
   if (!await hasBundle()) { t.skip("dist/runtime/index.cjs missing — run `npm run build` first"); return; }
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-deploy-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await chmod(paths.parent, 0o700);
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
@@ -122,6 +128,18 @@ test("SIGKILL preserves the OS lock inode and persisted workspace state", { time
   // Persisted state must survive on disk; the next runtime will reload it.
   const persisted = JSON.parse(await readFile(path.join(dataDir, "state.json"), "utf8"));
   assert.ok(persisted.sessions.some((s: { name: string }) => s.name === "Survives"));
+  const recovered = await launchRuntime({
+    dataDir, helpersDir: path.resolve("dist/helpers"), executable: process.execPath,
+    runtimeEntry: path.resolve("dist/runtime/index.cjs"), runtimeDir: paths.runtime,
+    socketPath: paths.socket, lockPath: paths.lock,
+  });
+  try {
+    assert.notEqual(recovered.incarnation, first.incarnation);
+    assert.equal((await stat(paths.lock)).ino, originalInode);
+    const client = new ControlClient(paths.socket, { profileKey: paths.key, token: recovered.token });
+    try { assert.ok((await client.call("snapshot")).sessions.some(s => s.name === "Survives")); }
+    finally { client.close(); }
+  } finally { await recovered.stop("SIGTERM", 2000); }
 });
 
 test("a wrong token fails the handshake cleanly", async t => {
@@ -130,7 +148,7 @@ test("a wrong token fails the handshake cleanly", async t => {
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-deploy-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await chmod(paths.parent, 0o700);
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });

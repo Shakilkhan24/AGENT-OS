@@ -7,6 +7,14 @@ import { SessionService } from "../src/main/service";
 import { SessionFilesystem } from "../src/main/filesystem";
 import { Store } from "../src/main/store";
 import { type OwnedDb, openManagedDatabase } from "../src/runtime/db-owner";
+import { profilePaths } from "../src/main/profile-runtime";
+
+/** Test-owned control endpoints; never chmod or remove the user's shared /tmp root. */
+export function isolatedRuntimePaths(dataDir: string, parent: string) {
+  const paths = profilePaths(dataDir);
+  return { ...paths, parent, runtime: path.join(parent, paths.key),
+    socket: path.join(parent, `${paths.key}.sock`), lock: path.join(parent, `${paths.key}.lock`) };
+}
 
 export class EngineDouble implements EngineAdapter {
   readonly capabilities = { id: "test", platforms: ["linux"], persistent: true, environment: true, pushStatus: false, processTree: false };

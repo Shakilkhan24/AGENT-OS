@@ -12,15 +12,16 @@ import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { open, unlink } from "node:fs/promises";
 import path from "node:path";
-import { configureLogging, log } from "../main/logging";
-import { privateDirectory, profilePaths } from "../main/profile-runtime";
+import { Logger, configureLogging, log } from "../main/logging";
+import { profilePaths } from "../main/profile-runtime";
+import { prepareRuntimeStartup } from "./startup";
+import { version as APP_VERSION } from "../../package.json";
 import { AUTH_FRAME_BYTES, type RuntimeCredential } from "../shared/runtime-protocol";
 import { ControlServer } from "./control-server";
 import { RuntimeWorkspace } from "./workspace";
 
 declare const process: NodeJS.Process & { env: Record<string, string | undefined> };
 
-const APP_VERSION = "1.2.2-headless";
 
 function fail(message: string, exitCode = 1): never {
   process.stderr.write(JSON.stringify({ code: "UNAVAILABLE", message }) + "\n");
@@ -34,9 +35,8 @@ async function main() {
   const helpersDir = process.argv[5];
   if (!socketPath || !dataDir || !runtimeDir || !helpersDir)
     fail(`Missing arguments: <socket-path> <data-dir> <runtime-dir> <helpers-dir> required`);
-  configureLogging({ write: async () => {} });
-  await privateDirectory(path.dirname(runtimeDir));
-  await privateDirectory(runtimeDir);
+  await prepareRuntimeStartup(dataDir, runtimeDir, socketPath);
+  configureLogging(new Logger(path.join(dataDir, "logs", "runtime")));
   const workspace = await RuntimeWorkspace.open(dataDir, helpersDir, APP_VERSION);
   const credential: RuntimeCredential = {
     profileKey: profilePaths(dataDir).key,

@@ -17,8 +17,9 @@ import { access, mkdtemp, readFile, rm, stat, chmod, mkdir } from "node:fs/promi
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { profilePaths } from "../../src/main/profile-runtime";
+import { isolatedRuntimePaths } from "../support";
 import { ControlClient } from "../../src/runtime/control-client";
+import { version } from "../../package.json";
 
 const READY_BUDGET_MS = 10_000;
 
@@ -33,11 +34,12 @@ async function hasBundle(): Promise<boolean> {
 
 async function spawnRuntime(parentDir: string, helpersDir: string) {
   const dataDir = await mkdtemp(path.join(parentDir, "minimal-runtime-entry-data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parentDir);
   const runtimeDir = `${paths.parent}/${paths.key}`;
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await mkdir(runtimeDir, { recursive: true, mode: 0o700 });
-  const child = spawn(process.execPath, [
+  const child = spawn("python3", [
+    path.join(helpersDir, "runtime_lock.py"), paths.lock, process.execPath,
     path.resolve("dist/runtime/index.cjs"), paths.socket, dataDir, runtimeDir, helpersDir,
   ], { env: { ...process.env, MINIMAL_DATA_DIR: dataDir }, stdio: ["ignore", "pipe", "pipe"] });
   const stderrChunks: Buffer[] = [];
@@ -68,8 +70,9 @@ test("runtime entrypoint serves ready.json and a valid ControlClient handshake",
   t.after(() => rm(parent, { recursive: true, force: true }));
   const handle = await spawnRuntime(parent, path.resolve("dist/helpers"));
   t.after(async () => {
-    if (!handle.child.killed) handle.child.kill("SIGTERM");
-    await once(handle.child, "exit").catch(() => {});
+    if (handle.child.exitCode === null && handle.child.signalCode === null) {
+      const exited = once(handle.child, "exit"); handle.child.kill("SIGTERM"); await exited;
+    }
   });
   if (!handle.ready) {
     handle.child.kill("SIGKILL");
@@ -82,6 +85,7 @@ test("runtime entrypoint serves ready.json and a valid ControlClient handshake",
     const welcome = await client.ready;
     assert.equal(welcome.incarnation, handle.ready!.incarnation);
     assert.equal(welcome.appVersion, handle.ready!.appVersion);
+    assert.equal(welcome.appVersion, version);
     const hello = await client.call("hello");
     assert.equal(hello.incarnation, handle.ready!.incarnation);
   } finally { client.close(); }
@@ -93,7 +97,7 @@ test("runtime entrypoint refuses to start when the socket directory is shared", 
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-runtime-entry-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   const runtimeDir = `${paths.parent}/${paths.key}`;
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await mkdir(runtimeDir, { recursive: true, mode: 0o700 });

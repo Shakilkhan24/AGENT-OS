@@ -15,7 +15,7 @@ import { access, mkdtemp, rm, stat, readFile, writeFile, mkdir } from "node:fs/p
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { launchRuntime, tryAttachRuntime } from "../../src/main/runtime-launcher";
-import { profilePaths } from "../../src/main/profile-runtime";
+import { isolatedRuntimePaths } from "../support";
 import { ControlClient } from "../../src/runtime/control-client";
 
 async function hasTmux(): Promise<boolean> {
@@ -33,9 +33,7 @@ test("launchRuntime spawns the runtime child and serves a valid token", async t 
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-launcher-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
-  await mkdir(paths.parent, { recursive: true, mode: 0o700 });
-  await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
+  const paths = isolatedRuntimePaths(dataDir, parent);
   const handle = await launchRuntime({
     dataDir,
     helpersDir: path.resolve("dist/helpers"),
@@ -66,7 +64,7 @@ test("launchRuntime resolves stop() within the budget on SIGTERM", async t => {
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-launcher-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
   const handle = await launchRuntime({
@@ -92,7 +90,7 @@ test("launchRuntime refuses a stale ready.json from a previous crash", async t =
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-launcher-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
   // Plant a stale ready.json that looks valid; launchRuntime must overwrite it.
@@ -129,7 +127,7 @@ test("tryAttachRuntime binds to the live runtime and a second launch attaches in
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-launcher-attach-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
 
@@ -169,13 +167,19 @@ test("tryAttachRuntime binds to the live runtime and a second launch attaches in
   t.after(async () => { try { await second.stop("SIGTERM", 500); } catch {} });
   assert.equal(second.attached, true, "second launch attaches instead of spawning");
   assert.equal(second.token, first.token);
+  // Discovery itself must release its connection, or reopening fills the
+  // eight-peer runtime limit even though each GUI closes its own client.
+  for (let i = 0; i < 12; i++) {
+    const probe = await tryAttachRuntime({ socketPath: paths.socket, runtimeDir: paths.runtime });
+    assert.ok(probe, `discovery ${i} must not exhaust peer slots`);
+  }
 });
 
 test("tryAttachRuntime returns undefined when no live runtime owns the profile", { timeout: 10000 }, async t => {
   const parent = await mkdtemp(path.join(tmpdir(), "minimal-attach-empty-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dataDir = await mkdtemp(path.join(parent, "data-"));
-  const paths = profilePaths(dataDir);
+  const paths = isolatedRuntimePaths(dataDir, parent);
   await mkdir(paths.parent, { recursive: true, mode: 0o700 });
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
   // No ready.json, no socket — must return undefined (no spawn, no error).

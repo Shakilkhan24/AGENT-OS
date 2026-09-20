@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { AppError } from "../shared/errors";
 import { ControlClient } from "../runtime/control-client";
-import { createPrivateLockFile } from "./profile-runtime";
+import { createPrivateLockFile, privateDirectory } from "./profile-runtime";
 
 const READY_BUDGET_MS = 10_000;
 const READY_POLL_MS = 100;
@@ -86,22 +86,24 @@ function parseStderrError(stderr: string): { code: "BUSY" | "EADDRINUSE" | "UNAV
 
 export async function launchRuntime(options: RuntimeLaunchOptions): Promise<RuntimeHandle> {
   const { dataDir, helpersDir, executable, runtimeEntry, runtimeDir, socketPath, lockPath } = options;
+  await privateDirectory(path.dirname(lockPath));
+  await privateDirectory(runtimeDir);
   await createPrivateLockFile(lockPath);
   // M1.6: if a runtime is already serving this profile, attach to it instead
   // of spawning a duplicate. The launcher returns a detached handle so window
   // close does not become an implicit runtime stop.
   const attached = await tryAttachRuntime({ socketPath, runtimeDir });
   if (attached) return attached;
-  // Clear any stale ready.json so a previous crash cannot be misread as fresh.
-  await rm(path.join(runtimeDir, "ready.json"), { force: true });
+  // Only the child may remove stale endpoints, after acquiring its OS lock.
   const helper = path.join(helpersDir, "runtime_lock.py");
   const args = [helper, lockPath, executable, runtimeEntry, socketPath, dataDir, runtimeDir, helpersDir];
   const child: ChildProcessByStdio<null, Readable, Readable> = spawn("python3", args, {
     env: { ...process.env, MINIMAL_DATA_DIR: dataDir, ELECTRON_RUN_AS_NODE: "1", ...(options.env ?? {}) },
+    detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const stderrChunks: Buffer[] = [];
-  child.stderr.on("data", chunk => stderrChunks.push(chunk));
+  let stderrTail = Buffer.alloc(0);
+  child.stderr.on("data", chunk => { stderrTail = Buffer.concat([stderrTail, chunk]).subarray(-64 * 1024); });
   child.stdout.on("data", () => {});
   child.once("error", () => {});
   const readyPath = path.join(runtimeDir, "ready.json");
@@ -112,12 +114,17 @@ export async function launchRuntime(options: RuntimeLaunchOptions): Promise<Runt
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) break;
     try {
-      ready = JSON.parse(await readFile(readyPath, "utf8"));
-      break;
+      const candidate = JSON.parse(await readFile(readyPath, "utf8"));
+      if (candidate.pid === child.pid && candidate.socket === socketPath
+          && /^[a-f0-9]{64}$/.test(candidate.token) && typeof candidate.incarnation === "string") {
+        ready = candidate;
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, poll));
     } catch { await new Promise(resolve => setTimeout(resolve, poll)); }
   }
   if (!ready) {
-    const stderr = Buffer.concat(stderrChunks).toString("utf8");
+    const stderr = stderrTail.toString("utf8");
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     const parsed = parseStderrError(stderr);
     if (parsed?.code === "BUSY") throw new AppError("BUSY", parsed.message || "A runtime already owns this profile");
@@ -204,6 +211,7 @@ export async function tryAttachRuntime(args: {
   try {
     const welcome = await client.ready;
     if (welcome.incarnation !== ready.incarnation) { client.close(); return undefined; }
+    client.close(); // A successful discovery probe must not consume a runtime peer slot.
     return {
       pid: ready.pid ?? -1,
       token: ready.token,
