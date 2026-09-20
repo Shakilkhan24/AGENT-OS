@@ -54,11 +54,10 @@ export type GateResult = GateOk | GateDeny;
  */
 export async function checkLease(worker: DbWorker, input: MutateWithLeaseInput): Promise<GateResult> {
   const parsed = GATE_INPUT.parse(input);
-  // The lookup is synchronous on purpose: the renderer calls this on the
-  // main thread, awaiting a transaction would block UI updates.
-  return worker.transaction(async tx => {
+  // Read and validate in one synchronous database transaction.
+  return worker.transaction(tx => {
     void tx;
-    const lease = await readActiveLease(worker, parsed.workspaceId);
+    const lease = readActiveLease(worker, parsed.workspaceId);
     if (!lease) return { ok: false, reason: "missing", message: "No active lease for this workspace" } as GateDeny;
     if (lease.holder !== parsed.holder)
       return { ok: false, reason: "mismatch", message: `Lease held by ${lease.holder}, not ${parsed.holder}` } as GateDeny;

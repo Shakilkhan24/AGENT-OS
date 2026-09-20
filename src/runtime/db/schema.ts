@@ -403,9 +403,8 @@ export const tableSpecs: readonly TableSpec[] = [
       updated_at TEXT NOT NULL
     )`,
     indices: [
-      "CREATE INDEX receipt_run_idx ON context_receipt(run_id)",
       "CREATE INDEX receipt_status_idx ON context_receipt(status)",
-      "CREATE UNIQUE INDEX receipt_run_idx ON context_receipt(run_id)",
+      "CREATE UNIQUE INDEX receipt_run_unique_idx ON context_receipt(run_id)",
     ],
   },
   // M3c.2 — verifier executor + review-binding. Recipes live per-project;

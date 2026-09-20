@@ -1,11 +1,11 @@
 /**
  * M3c.1 — runtime database owner.
  *
- * The runtime owns a single `DbWorker` backed by either `node:sqlite`
- * (production, on the per-profile `/tmp/minimal-${uid}/${profileId}/state.db`
- * path resolved by `resolveProfilePaths`) or the in-memory driver (test
- * and dev shells where `MINIMAL_RUNTIME_DB=memory` is set, or
- * `node:sqlite` isn't available — e.g. dev shells on Node < 22.12).
+ * The runtime owns one real SQLite connection. Memory is an explicit test
+ * opt-in, never a fallback for a broken or unsupported production runtime.
+ * The current caller places state.db under dataDir. M2 storage relocation
+ * and migration remain a separate integration gate; runtimeDir is NOT proof
+ * of durable Linux-native storage.
  *
  * The owner applies the schema DDL exactly once on open so the worker is
  * ready before the runtime workspace starts dispatching handlers.
@@ -41,9 +41,8 @@ export interface OwnedDb {
 
 /**
  * Open the worker's backing store and apply the schema. Returns the
- * owned handle. The `dataDir` argument is the user's data directory
- * (where `profile.id` lives); the SQLite DB lives next to the runtime
- * directory on Linux-native storage, never under OneDrive.
+ * owned handle. Preserve the current database path until a verified store
+ * locator migration can relocate existing data without silently losing it.
  *
  * Resolution rules:
  *  - `MINIMAL_RUNTIME_DB=memory` always picks the in-memory driver
@@ -51,19 +50,19 @@ export interface OwnedDb {
  *  - Otherwise, when `node:sqlite` is available, open a per-profile
  *    SQLite database next to `runtimeDir`. The directory is created
  *    with mode 0700.
- *  - As a final fallback (e.g. a host that bundles Electron without
- *    `node:sqlite`), use the in-memory driver. The runtime still works;
- *    a notice is logged by the caller (not by this module) so the
- *    user knows data is not persisted across restarts.
+ *  - Missing SQLite refuses startup, rather than acknowledging volatile work.
  */
 export async function openManagedDatabase(dataDir: string, runtimeDir: string): Promise<OwnedDb> {
   if (!dataDir) throw new AppError("INVALID_REQUEST", "dataDir is required");
   const preferMemory = process.env.MINIMAL_RUNTIME_DB === "memory";
-  const useSqlite = !preferMemory && hasSqliteBuiltin();
+  if (!preferMemory && !hasSqliteBuiltin())
+    throw new AppError("UNAVAILABLE", "This runtime requires node:sqlite; reopen MINIMAL with its supported packaged runtime");
+  const useSqlite = !preferMemory;
   const driver: Database = useSqlite
     ? await openSqliteDriver(dataDir, runtimeDir)
     : new MemoryDatabase();
-  applySchema(driver);
+  try { applySchema(driver, useSqlite); }
+  catch (error) { driver.close(); throw error; }
   const worker = new DbWorker({ driver });
   let closed = false;
   return {
@@ -82,13 +81,7 @@ export async function openManagedDatabase(dataDir: string, runtimeDir: string): 
 }
 
 async function openSqliteDriver(dataDir: string, runtimeDir: string): Promise<Database> {
-  // Resolve the canonical profile path so the SQLite file lives next to
-  // the runtime dir on Linux-native storage. The legacy /data-dir/state.db
-  // path is deliberately not used; SQLite stays on the same tmpfs/rootfs
-  // partition so fsync semantics are honoured.
-  // `runtimeDir` already identifies the per-profile tmpfs directory; the
-  // sqlite file lives next to it so the lock, socket and DB all share
-  // ownership + permissions.
+  // Keep the existing layout. Do not silently relocate an acknowledged DB.
   const sqlitePath = path.join(path.dirname(runtimeDir), "state.db");
   await mkdir(path.dirname(sqlitePath), { recursive: true, mode: 0o700 });
   // Touch the data dir so tests that pass an empty directory don't see
@@ -97,9 +90,14 @@ async function openSqliteDriver(dataDir: string, runtimeDir: string): Promise<Da
   return new SqliteDatabase(sqlitePath);
 }
 
-function applySchema(driver: Database): void {
-  for (const table of tableSpecs) {
-    driver.prepare(table.ddl).run();
-    for (const index of table.indices) driver.prepare(index).run();
-  }
+function applySchema(driver: Database, sqlite: boolean): void {
+  // Bootstrap is atomic and repeatable; this does not replace versioned migrations.
+  const ddl = (sql: string) => sqlite
+    ? sql.replace(/^CREATE (TABLE|(?:UNIQUE )?INDEX) /, "CREATE $1 IF NOT EXISTS ") : sql;
+  driver.transaction(() => {
+    for (const table of tableSpecs) {
+      driver.prepare(ddl(table.ddl)).run();
+      for (const index of table.indices) driver.prepare(ddl(index)).run();
+    }
+  });
 }

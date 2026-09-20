@@ -221,7 +221,7 @@ export async function invalidateOpenReviewsForRun(
   const now = new Date().toISOString();
   const invalidated: Review[] = [];
   const attentionIds: string[] = [];
-  await worker.transaction(async tx => {
+  await worker.transaction(tx => {
     void tx;
     const rows = driver.prepare(
       "SELECT * FROM review WHERE run_id = ? AND status = 'open'",
@@ -230,8 +230,7 @@ export async function invalidateOpenReviewsForRun(
       const id = String((row as Record<string, unknown>).uuid);
       driver.prepare("UPDATE review SET status = 'invalidated', updated_at = ? WHERE uuid = ?")
         .run(now, id);
-      const after = await readReview(worker, id);
-      if (after) invalidated.push(after);
+      invalidated.push(parseReviewRow({ ...row, status: "invalidated", updated_at: now }));
     }
   });
   // After the transaction, raise one attention item per affected review

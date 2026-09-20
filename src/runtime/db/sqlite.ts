@@ -10,6 +10,7 @@
  * `Database`: production code targets the same contract as the in-memory
  * implementation, so behaviour stays comparable across drivers.
  */
+import { types as utilTypes } from "node:util";
 import type { Bindings, Database, Row, Statement, Transaction, Value } from "./types";
 
 interface SqliteStatementRaw {
@@ -20,7 +21,6 @@ interface SqliteStatementRaw {
 interface SqliteDatabaseRaw {
   prepare(sql: string): SqliteStatementRaw;
   exec(sql: string): void;
-  transaction<T extends (...args: never[]) => unknown>(fn: T): T;
   close(): void;
 }
 interface SqliteModule { DatabaseSync: new (path: string) => SqliteDatabaseRaw }
@@ -54,9 +54,11 @@ class SqliteTransaction implements Transaction {
 export class SqliteDatabase implements Database {
   private readonly connection: SqliteDatabaseRaw;
   private closed = false;
+  private inTransaction = false;
   constructor(filename: string) {
-    const moduleName = "node:sqlite";
-    const module = require(moduleName) as SqliteModule;
+    // Works in both the ESM test runner and the bundled CommonJS runtime.
+    const module = process.getBuiltinModule("node:sqlite") as SqliteModule | undefined;
+    if (!module?.DatabaseSync) throw new Error("This runtime does not provide node:sqlite");
     this.connection = new module.DatabaseSync(filename);
     // Apply FULL durability and WAL pragmas up-front so a power loss never
     // leaves an "acknowledged" row stranded in WAL-only state.
@@ -68,14 +70,28 @@ export class SqliteDatabase implements Database {
   prepare(sql: string): Statement { return new SqliteStatementWrapper(this.connection.prepare(sql)); }
   transaction<T>(fn: (tx: Transaction) => T): T {
     if (this.closed) throw new Error("Database is closed");
-    let txHandle: SqliteTransaction | undefined;
-    const wrapped = this.connection.transaction(() => {
-      txHandle = new SqliteTransaction();
+    if (this.inTransaction) throw new Error("Nested transactions are not allowed");
+    if (utilTypes.isAsyncFunction(fn)) throw new Error("Transaction bodies must be synchronous");
+    this.connection.exec("BEGIN IMMEDIATE");
+    this.inTransaction = true;
+    const txHandle = new SqliteTransaction();
+    try {
       const result = fn(txHandle);
-      txHandle.finish();
+      if (result && typeof (result as { then?: unknown }).then === "function") {
+        // Do not leave a rejected promise unobserved, or commit before it settles.
+        void Promise.resolve(result).catch(() => {});
+        throw new Error("Transaction bodies must be synchronous");
+      }
+      this.connection.exec("COMMIT");
       return result;
-    });
-    return wrapped() as T;
+    } catch (error) {
+      try { this.connection.exec("ROLLBACK"); }
+      catch (rollbackError) { throw new AggregateError([error, rollbackError], "Transaction and rollback failed"); }
+      throw error;
+    } finally {
+      txHandle.finish();
+      this.inTransaction = false;
+    }
   }
   exclusive<T>(fn: () => T): T { return fn(); }
   lastInsertRowid(): number {
@@ -92,6 +108,6 @@ export class SqliteDatabase implements Database {
 
 /** Detect whether the running Node provides `node:sqlite`. */
 export function hasSqliteBuiltin(): boolean {
-  try { require("node:sqlite"); return true; }
+  try { return Boolean(process.getBuiltinModule("node:sqlite")?.DatabaseSync); }
   catch { return false; }
 }

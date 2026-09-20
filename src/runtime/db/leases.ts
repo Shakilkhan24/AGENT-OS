@@ -117,7 +117,7 @@ export async function listLeases(worker: DbWorker): Promise<Lease[]> {
   return rows.map(parseLeaseRow);
 }
 
-export async function readActiveLease(worker: DbWorker, workspaceId: string): Promise<Lease | undefined> {
+export function readActiveLease(worker: DbWorker, workspaceId: string): Lease | undefined {
   const driver = driverOf(worker);
   const row = driver.prepare("SELECT * FROM lease WHERE workspace_id = ? AND state = 'held' ORDER BY acquired_at DESC LIMIT 1")
     .first(workspaceId);

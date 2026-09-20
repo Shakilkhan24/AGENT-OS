@@ -97,7 +97,7 @@ export class RuntimeWorkspace {
         throw new AppError("CONFLICT", "Terminal selection changed; input was cancelled");
       return this.attachment.view;
     };
-    dispatcher.register("hello", () => ({ apiVersion: API_VERSION, appVersion: this.appVersion, incarnation: this.incarnation }));
+    dispatcher.register("hello", () => ({ apiVersion: API_VERSION, appVersion: this.appVersion, incarnation: this.incarnation } as const));
     dispatcher.register("snapshot", async () => ({
       ...(await service.snapshot()),
       managed: await buildManagedProjection(this.ownedDb.worker),
