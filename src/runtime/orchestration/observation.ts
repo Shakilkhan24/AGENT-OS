@@ -12,6 +12,11 @@
  * a half-observation) and `usage` is nullable because providers that
  * don't expose token counts simply omit the field.
  *
+ * M7.5 extends `observationUsageSchema` with `costUsd` + the pinned
+ * `pricingTierDigest` so a renderer can display reported spend
+ * separated from estimates and with explicit "freshness". The
+ * defaults are `null` so existing observation rows parse unchanged.
+ *
  * Mirrors the transactional next-seq insert at `src/runtime/db/reconcile.ts:90-101`.
  */
 import { z } from "zod";
@@ -31,11 +36,30 @@ function driverOf(worker: DbWorker): DriverRaw {
   return (worker as unknown as { driver: DriverRaw }).driver;
 }
 
+export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+
 export const observationUsageSchema = z.object({
   inputTokens: z.number().int().min(0).nullable().default(null),
   outputTokens: z.number().int().min(0).nullable().default(null),
   cacheReadTokens: z.number().int().min(0).nullable().default(null),
   cacheWriteTokens: z.number().int().min(0).nullable().default(null),
+  /**
+   * M7.5 — reported spend in USD, derived from the provider's
+   * observed token counts using the run's pinned pricing tier.
+   * `null` means the provider reported no usage (no compute ⇒ no
+   * cost). Negative values are rejected (no credits on the
+   * observation surface; compensation is a separate operation).
+   */
+  costUsd: z.number().nonnegative().nullable().default(null),
+  /**
+   * M7.5 — pinned pricing-tier digest (sha256 of the
+   * pricing-catalog row used to derive `costUsd`). Two observations
+   * with the same tokens but different digests MUST produce
+   * different `costUsd` — the digest makes pricing changes
+   * visible in the audit trail. `null` when the provider did not
+   * pin a tier (e.g. anonymous / unpriced).
+   */
+  pricingTierDigest: z.string().regex(SHA256_HEX_RE).nullable().default(null),
 }).strict();
 
 export const observationPayloadSchema = z.object({
