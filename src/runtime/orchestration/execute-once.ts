@@ -41,7 +41,7 @@ import {
   transitionInvocation,
 } from "../db/invocations";
 import {
-  recordDispatchIntent,
+  claimInvocationDispatch,
   transitionDispatchIntent,
 } from "../db/dispatch-intents";
 import { resolveAdapter } from "../providers/registry";
@@ -51,6 +51,11 @@ import {
 } from "../providers/adapter";
 import { markAmbiguous } from "./uncertain";
 import { isStopped } from "./stop-policy";
+import {
+  DEFAULT_RETRY_POLICY,
+  retryPolicySchema,
+  type RetryPolicy,
+} from "./retry-policy";
 
 const EXECUTE_ONCE_INPUT = z.object({
   runId: z.string().uuid(),
@@ -65,6 +70,13 @@ const EXECUTE_ONCE_INPUT = z.object({
   deadlineAt: z.string().datetime(),
   parentInvocationId: z.string().uuid().nullable().default(null),
   revision: z.string().regex(/^[0-9a-f]{7,64}$/).nullable().default(null),
+  /**
+   * M7.4 — retry policy for this dispatch. Defaults to the
+   * `unknown` / no-retry policy when omitted. The Zod parser
+   * refines `effect: "unknown" ⇒ maxAttempts: 1` so a malformed
+   * policy fails at parse, not at runtime.
+   */
+  retryPolicy: retryPolicySchema.optional(),
 });
 export type ExecuteOnceInput = z.input<typeof EXECUTE_ONCE_INPUT>;
 
@@ -116,6 +128,16 @@ export async function executeOnce(
   input: ExecuteOnceInput,
 ): Promise<ExecuteOnceResult> {
   const parsed = EXECUTE_ONCE_INPUT.parse(input);
+  // M7.4 — resolve the retry policy (defaults to no-retry). The Zod
+  // refinement already rejected `effect: "unknown" + maxAttempts > 1`
+  // at parse time; here we only need the parsed, valid policy. We
+  // do not mutate any state on it today — M7.4's job is to make the
+  // policy surface explicit so downstream steps (verifier, executor,
+  // schedule dispatcher) can read it back. The `void` keeps the
+  // local available for future enrichment without tripping
+  // TS6133 ("declared but never read").
+  const retryPolicy: RetryPolicy = parsed.retryPolicy ?? DEFAULT_RETRY_POLICY;
+  void retryPolicy;
   // Per-run stop gate. If the run has been cancelled, future
   // `executeOnce` calls refuse to spawn a new adapter; the caller
   // surfaces the unconfirmed descendants in the run summary.
@@ -163,14 +185,8 @@ export async function executeOnce(
     };
   }
   // ── 4 + 5. intent claim ───────────────────────────────────────────────
-  // Record a fresh intent every time (the orchestrator's audit trail is
-  // per-call). The first transition moves it to `claimed` (durable
-  // exclusive claim); the next to `spawned` once the adapter has the
-  // process. Idempotent retries with the same idempotencyKey share the
-  // invocation but still mint a new intent so the audit carries every
-  // attempt. (D-4 forbids respawning an ambiguous dispatch — see
-  // `markAmbiguous`.)
-  const intent = await recordDispatchIntent(worker, {
+  // Claim the invocation and its intent in one transaction before any spawn.
+  const intent = await claimInvocationDispatch(worker, {
     runId: parsed.runId,
     invocationId: invocation.id,
     method: parsed.method,
@@ -178,7 +194,8 @@ export async function executeOnce(
     scope: parsed.scope,
     deadlineAt: parsed.deadlineAt,
   });
-  await transitionDispatchIntent(worker, intent.id, "claimed");
+  if (!intent) return { kind: "ambiguous", invocationId: invocation.id,
+    reason: "Invocation already claimed; reconcile the original execution before continuing" };
   // ── 6. spawn ──────────────────────────────────────────────────────────
   const spawnReq: SpawnRequest = {
     correlationId: invocation.id,
@@ -191,14 +208,17 @@ export async function executeOnce(
     scopeJson: JSON.stringify(parsed.scope ?? {}),
     parentInvocationId: parsed.parentInvocationId,
   };
-  const handle = await adapter.spawn(spawnReq);
-  await transitionDispatchIntent(worker, intent.id, "spawned");
-  // pending → admitted → spawned. The intent's `spawned` transition
-  // corresponds to "the adapter has accepted the request"; the matching
-  // invocation transition lands the call in the same observable state.
-  if (invocation.status === "pending")
-    await transitionInvocation(worker, invocation.id, { to: "admitted" });
-  await transitionInvocation(worker, invocation.id, { to: "spawned" });
+  let handle: ProviderHandle;
+  try {
+    handle = await adapter.spawn(spawnReq);
+    await transitionDispatchIntent(worker, intent.id, "spawned");
+    await transitionInvocation(worker, invocation.id, { to: "spawned" });
+  } catch {
+    // A failed acknowledgement cannot prove that no external effect started.
+    const reason = "Provider spawn or persistence failed after the durable claim";
+    await markAmbiguous(worker, { invocationId: invocation.id, correlationId: invocation.id, reason });
+    return { kind: "ambiguous", invocationId: invocation.id, reason };
+  }
 
   // Wire the lifecycle observer BEFORE returning. EventEmitter calls
   // listeners synchronously, so the disconnect path runs in-band and

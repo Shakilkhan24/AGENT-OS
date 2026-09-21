@@ -45,6 +45,7 @@ import {
   isStopped as isStoppedInOrchestrator,
   requestStop as requestStopImpl,
 } from "./stop-policy";
+import { retryPolicySchema } from "./retry-policy";
 
 // ── `answer` ────────────────────────────────────────────────────────────────
 
@@ -200,6 +201,12 @@ const NEW_ATTEMPT_INPUT = z.object({
   scope: z.unknown().default({}),
   deadlineAt: z.string().datetime(),
   requestedBy: z.string().min(1).max(256),
+  /**
+   * M7.4 — optional retry policy. When omitted, the new attempt
+   * inherits the previous invocation's policy (or the default
+   * no-retry policy if none was recorded).
+   */
+  retryPolicy: retryPolicySchema.optional(),
 }).strict();
 export type NewAttemptInput = z.input<typeof NEW_ATTEMPT_INPUT>;
 
@@ -239,6 +246,7 @@ export async function newAttempt(
     idempotencyKey: parsed.idempotencyKey,
     canonicalDigest: parsed.canonicalDigest,
     method: parsed.method,
+    retryPolicy: parsed.retryPolicy,
   });
 }
 
@@ -254,6 +262,7 @@ interface FollowingInvocationArgs {
   method: string;
   extra?: Record<string, unknown>;
   attentionId?: string;
+  retryPolicy?: ExecuteOnceInput["retryPolicy"];
 }
 
 async function spawnFollowingInvocation(
@@ -279,6 +288,7 @@ async function spawnFollowingInvocation(
     deadlineAt: args.deadlineAt,
     parentInvocationId,
     revision: null,
+    retryPolicy: args.retryPolicy,
   };
   // The orchestrator's `createInvocation` derives the next attempt
   // number internally from the run's invocations; the dispatch_intent
