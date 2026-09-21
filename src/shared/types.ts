@@ -8,6 +8,20 @@ import type { DomainEvent, StopPolicy } from "./events";
 import type { Failure } from "./errors";
 import type { Result } from "./protocol";
 import type { ManagedProjectionOrUnavailable } from "./managed-view";
+import type {
+  WorkflowGraphInput,
+  WorkflowResult,
+  WorkflowExecutorSettingsInput,
+} from "./workflow-executor-schema";
+// M7.7 — the API surface's attention-kind enum mirrors the wire
+// result schema (transitionAttentionResultSchema) so the renderer
+// can pattern-match every kind including the new schedule-decision
+// + ci-failure entries.
+import type {
+  TransitionAttentionResult,
+  AnswerAttentionResult,
+} from "./managed-schema";
+export type { TransitionAttentionResult, AnswerAttentionResult };
 export type { EnvProfile, Hook, SessionMetadata };
 export interface Preset {
   id: string;
@@ -183,13 +197,7 @@ export interface API {
   transitionAttention(
     id: string,
     to: "seen" | "snoozed" | "dismissed" | "resolved",
-  ): Promise<{
-    id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop" | "hook-failure";
-    issueIdentity: string; revision: number;
-    state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
-    payloadJson: string; snoozedUntil: string | null;
-    createdAt: string; updatedAt: string;
-  }>;
+  ): Promise<TransitionAttentionResult>;
   /**
    * M3c.3 — write the durable snooze deadline AND transition to
    * `snoozed` atomically. The runtime widens `new → seen` so the
@@ -198,13 +206,7 @@ export interface API {
   snoozeAttention(
     id: string,
     until: string,
-  ): Promise<{
-    id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop" | "hook-failure";
-    issueIdentity: string; revision: number;
-    state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
-    payloadJson: string; snoozedUntil: string | null;
-    createdAt: string; updatedAt: string;
-  }>;
+  ): Promise<TransitionAttentionResult>;
   /**
    * M3c.3 — bounded artifact read. Requires an approved grant for
    * `(principal, sha256)` whose scope includes the artifact's kind;
@@ -259,22 +261,7 @@ export interface API {
   answerAttention(
     id: string,
     input: { reply: string; answeredBy: string },
-  ): Promise<{
-    resolved: {
-      id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop" | "hook-failure";
-      issueIdentity: string; revision: number;
-      state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
-      payloadJson: string; snoozedUntil: string | null;
-      createdAt: string; updatedAt: string;
-    };
-    followUp: {
-      id: string; taskId: string | null; kind: "decision" | "conflict" | "review" | "stop" | "hook-failure";
-      issueIdentity: string; revision: number;
-      state: "new" | "seen" | "snoozed" | "dismissed" | "resolved";
-      payloadJson: string; snoozedUntil: string | null;
-      createdAt: string; updatedAt: string;
-    };
-  }>;
+  ): Promise<AnswerAttentionResult>;
   /**
    * M3c.5 — resolve the open `decision` AND spawn a continuation
    * invocation via `executeOnce` (fresh idempotencyKey, attempt =
@@ -322,6 +309,25 @@ export interface API {
     runId: string,
     input: { reason: string; requestedBy: string },
   ): Promise<{ runId: string; status: "cancelled"; blockedExecuteOnce: true }>;
+  /**
+   * M6.1 — execute a workflow graph to completion. The renderer
+   * supplies a complete `WorkflowGraph` (Zod-strict, capped at
+   * 64 steps + 256 edges) plus an optional settings override;
+   * the runtime validates the graph (cycles, fan-out, input
+   * refs), runs each step via its existing primitive seam,
+   * emits audit events (`workflow.started` / `workflow.step.*`
+   * / `workflow.completed`), and returns the typed
+   * `WorkflowResult`. A `conflict` envelope surfaces any
+   * validation or dispatch failure without forcing the renderer
+   * to parse `Failure` shape.
+   */
+  runWorkflow(input: {
+    workflow: WorkflowGraphInput;
+    settings?: WorkflowExecutorSettingsInput | null;
+  }): Promise<
+    | { kind: "ok"; result: WorkflowResult }
+    | { kind: "conflict"; reason: string }
+  >;
 }
 declare global {
   interface Window {

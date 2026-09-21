@@ -77,10 +77,12 @@ export async function answerAttention(
   const parsed = ANSWER_INPUT.parse(input);
   const existing = await readAttention(worker, parsedId);
   if (!existing) throw new AppError("NOT_FOUND", "Attention item not found");
-  if (existing.kind !== "decision")
+  // M7.7 — `schedule-decision` is answered the same way as `decision`
+  // (the renderer surfaces it with the same "answer" affordance).
+  if (existing.kind !== "decision" && existing.kind !== "schedule-decision")
     throw new AppError(
       "CONFLICT",
-      `Answer can only resolve a "decision" item; this one is "${existing.kind}"`,
+      `Answer can only resolve a "decision" or "schedule-decision" item; this one is "${existing.kind}"`,
     );
   if (existing.state === "resolved" || existing.state === "dismissed")
     throw new AppError(
@@ -94,9 +96,13 @@ export async function answerAttention(
   // Raise the next-revision reply row under a stable issue identity
   // so the M3c.3 inbox surfaces a single "answered decision" entry
   // alongside the original. The reply lands in `payload_json`.
+  // M7.7 — preserve the resolved kind so a `schedule-decision` row
+  // is answered as a `schedule-decision` (the renderer surfaces both
+  // with the same answer affordance; collapsing the follow-up into a
+  // generic `decision` would lose that distinction).
   const followUp = await raiseAttention(worker, {
     taskId: resolved.taskId,
-    kind: "decision",
+    kind: resolved.kind,
     issueIdentity: resolved.issueIdentity,
     revision: resolved.revision + 1,
     payload: {

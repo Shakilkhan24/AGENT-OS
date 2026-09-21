@@ -90,10 +90,13 @@ export const transitionAttentionInputSchema = z.tuple([
 ]);
 
 /** Result: the updated attention item view. */
+// M7.7 — extends the `kind` enum to include `schedule-decision` and
+// `ci-failure`. The runtime's `transitionAttention` is kind-agnostic;
+// only the wire enum needed widening.
 export const transitionAttentionResultSchema = z.object({
   id: z.string().uuid(),
   taskId: z.string().uuid().nullable(),
-  kind: z.enum(["decision", "conflict", "review", "stop", "hook-failure"]),
+  kind: z.enum(["decision", "conflict", "review", "stop", "hook-failure", "schedule-decision", "ci-failure"]),
   issueIdentity: z.string().min(1).max(256),
   revision: z.number().int().min(0).max(1024),
   state: z.enum(["new", "seen", "snoozed", "dismissed", "resolved"]),
@@ -110,6 +113,8 @@ export const snoozeAttentionInputSchema = z.tuple([
 ]);
 
 export const snoozeAttentionResultSchema = transitionAttentionResultSchema;
+
+export type TransitionAttentionResult = z.output<typeof transitionAttentionResultSchema>;
 
 /**
  * Args: `[artifactId, principal, scopeJson | null]`.
@@ -223,6 +228,7 @@ export const answerAttentionResultSchema = z.object({
   resolved: transitionAttentionResultSchema,
   followUp: transitionAttentionResultSchema,
 }).strict();
+export type AnswerAttentionResult = z.output<typeof answerAttentionResultSchema>;
 
 /**
  * Args: `[attentionId, {...providerModel..., args, scope,

@@ -255,7 +255,19 @@ export type ArtifactReference = z.infer<typeof artifactReferenceSchema>;
 
 // ── AttentionItem ────────────────────────────────────────────────────────────
 
-export const attentionKindSchema = z.enum(["decision", "conflict", "review", "stop", "hook-failure"]);
+// M7.7 — `schedule-decision` + `ci-failure` join the existing five
+// attention kinds. Both reuse the existing FSM (`new | seen |
+// snoozed | dismissed | resolved`); only the payload shape + the
+// issueIdentity hashing (for stable-key dedup) differ.
+export const attentionKindSchema = z.enum([
+  "decision",
+  "conflict",
+  "review",
+  "stop",
+  "hook-failure",
+  "schedule-decision",
+  "ci-failure",
+]);
 export type AttentionKind = z.infer<typeof attentionKindSchema>;
 
 export const attentionStateSchema = z.enum(["new", "seen", "snoozed", "dismissed", "resolved"]);

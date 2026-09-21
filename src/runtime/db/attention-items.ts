@@ -23,13 +23,25 @@
  * or `snoozed` row with `snoozed_until > now` is filtered out of the
  * open-attention inbox but the row stays in `snoozed` state until the
  * user explicitly transitions it.
+ *
+ * M7.7 — `schedule-decision` + `ci-failure` join the existing five
+ * kinds. Both use the same FSM; both surface `raiseScheduleDecision` /
+ * `raiseCiFailure` helpers that pre-compute the `issueIdentity`
+ * (sha256 over the canonical payload) so the renderer can group
+ * repeated failures under a single stable key. `shouldSuppressAttention`
+ * is the alert-flood gate: a row raised within the dedup window for
+ * the same `(kind, issueIdentity)` collapses to the existing row so
+ * the inbox never carries dozens of identical failures.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AppError } from "../../shared/errors";
 import { attentionItemRowSchema } from "./schema";
 import { attentionKindSchema, attentionStateSchema, type AttentionItem } from "../../shared/managed";
 import type { DbWorker } from "./worker";
+
+/** M7.7 — default dedup window for stable-key attention rows. */
+export const DEFAULT_ATTENTION_DEDUP_WINDOW_MS = 60 * 60_000;
 
 interface DriverRaw {
   prepare(sql: string): {
@@ -207,4 +219,223 @@ function parseAttentionRow(row: Record<string, unknown>): AttentionItem {
     snoozedUntil: row.snoozed_until == null ? null : String(row.snoozed_until),
   });
   return { ...parsed, id: parsed.uuid };
+}
+
+// ── M7.7 — schedule-decision + ci-failure helpers ───────────────────────────
+
+export const scheduleDecisionPayloadSchema = z
+  .object({
+    scheduleId: z.string().min(1).max(128),
+    revision: z.number().int().min(0).max(2_048),
+    intendedUtc: z.string().datetime(),
+    kind: z.enum(["missed", "overlap", "stale-boot", "grace-expired"]),
+    recipeId: z.string().min(1).max(128),
+  })
+  .strict();
+export type ScheduleDecisionPayload = z.output<typeof scheduleDecisionPayloadSchema>;
+export type ScheduleDecisionPayloadInput = z.input<typeof scheduleDecisionPayloadSchema>;
+
+export const ciFailurePayloadSchema = z
+  .object({
+    artifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    buildId: z.string().min(1).max(256).optional(),
+    commitSha: z.string().regex(/^[0-9a-f]{7,64}$/).optional(),
+    workflowRunId: z.string().min(1).max(256).optional(),
+    attemptCount: z.number().int().min(0).max(1024),
+    lastErrorDigest: z.string().min(1).max(256),
+    retryBudgetExhausted: z.boolean(),
+  })
+  .strict();
+export type CiFailurePayload = z.output<typeof ciFailurePayloadSchema>;
+export type CiFailurePayloadInput = z.input<typeof ciFailurePayloadSchema>;
+
+/**
+ * Stable sha256 digest over an arbitrary object — keys are sorted
+ * to keep the surface deterministic across runtimes.
+ */
+function digestStable(value: unknown): string {
+  return createHash("sha256").update(stableStringifyLocal(value), "utf8").digest("hex");
+}
+
+function stableStringifyLocal(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringifyLocal).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringifyLocal(obj[k])}`).join(",")}}`;
+}
+
+/**
+ * M7.7 — alert-flood gate.
+ *
+ * Returns the most-recent existing attention row for
+ * `(kind, issueIdentity)` whose `createdAt` (or `updatedAt`) is
+ * within `windowMs` of `now`, or `null` if no such row exists.
+ *
+ * The check is intentionally cheap: a full scan is bounded by the
+ * attention row count, which the FSM keeps small (a `dismissed` /
+ * `resolved` row is filtered out so the inbox never grows
+ * unbounded).
+ */
+export function shouldSuppressAttention(
+  worker: DbWorker,
+  kind: AttentionItem["kind"],
+  issueIdentity: string,
+  options?: { windowMs?: number; now?: Date },
+): { existingItem: AttentionItem; ageMs: number } | null {
+  const windowMs = options?.windowMs ?? DEFAULT_ATTENTION_DEDUP_WINDOW_MS;
+  const now = options?.now ?? new Date();
+  const driver = driverOf(worker);
+  const all = driver
+    .prepare("SELECT * FROM attention_item WHERE kind = ? AND issue_identity = ?")
+    .all(kind, issueIdentity)
+    .map(parseAttentionRow);
+  if (all.length === 0) return null;
+  // Pick the most-recent row, regardless of state. We do not
+  // consider `resolved` as a suppression trigger: once an issue is
+  // resolved, a new raise must surface. `dismissed` rows are
+  // presentation-only and do NOT suppress.
+  const sorted = all.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  for (const item of sorted) {
+    if (item.state === "resolved") continue;
+    const lastTouched = new Date(item.updatedAt).getTime();
+    const ageMs = now.getTime() - lastTouched;
+    if (ageMs < 0) continue; // clock skew — be conservative
+    if (ageMs <= windowMs) return { existingItem: item, ageMs };
+  }
+  return null;
+}
+
+/**
+ * M7.7 — pick the next free revision for a `(kind, issueIdentity)`
+ * pair. The `UNIQUE(issueIdentity, revision)` index would collide
+ * if we tried to write `revision: 0` against a previously-resolved
+ * row at the same identity. This helper returns
+ * `max(existing.revision) + 1` (or `0` when no row exists) so the
+ * caller can stay declarative about wanting "a fresh row for this
+ * identity" without juggling revisions manually.
+ */
+export function nextRevisionFor(
+  worker: DbWorker,
+  kind: AttentionItem["kind"],
+  issueIdentity: string,
+): number {
+  const driver = driverOf(worker);
+  const rows = driver
+    .prepare("SELECT revision FROM attention_item WHERE kind = ? AND issue_identity = ?")
+    .all(kind, issueIdentity);
+  if (rows.length === 0) return 0;
+  let max = -1;
+  for (const row of rows) {
+    const r = Number((row as Record<string, unknown>).revision ?? 0);
+    if (r > max) max = r;
+  }
+  return max + 1;
+}
+
+export interface RaiseScheduleDecisionInput {
+  taskId?: string | null;
+  payload: ScheduleDecisionPayloadInput;
+  /** Optional override for the dedup window (default 1 hour). */
+  windowMs?: number;
+  now?: Date;
+}
+
+export interface RaiseScheduleDecisionResult {
+  readonly kind: "created" | "suppressed";
+  readonly item: AttentionItem;
+  readonly issueIdentity: string;
+}
+
+/**
+ * Raise a `schedule-decision` attention row. The `issueIdentity` is
+ * sha256 over the canonical payload, so identical (scheduleId,
+ * revision, intendedUtc, kind, recipeId) collapses to the same
+ * identity. Inside the dedup window a second raise returns the
+ * existing row with `kind: "suppressed"`. A re-raise AFTER the
+ * window (or after the existing row is resolved/dismissed) bumps
+ * the revision so the (issueIdentity, revision) UNIQUE index does
+ * not collide.
+ */
+export async function raiseScheduleDecision(
+  worker: DbWorker,
+  input: RaiseScheduleDecisionInput,
+): Promise<RaiseScheduleDecisionResult> {
+  const parsed = scheduleDecisionPayloadSchema.parse(input.payload);
+  const issueIdentity = digestStable({
+    kind: "schedule-decision",
+    scheduleId: parsed.scheduleId,
+    revision: parsed.revision,
+    intendedUtc: parsed.intendedUtc,
+    reason: parsed.kind,
+    recipeId: parsed.recipeId,
+  });
+  const suppressed = shouldSuppressAttention(worker, "schedule-decision", issueIdentity, {
+    windowMs: input.windowMs,
+    now: input.now,
+  });
+  if (suppressed) {
+    return { kind: "suppressed", item: suppressed.existingItem, issueIdentity };
+  }
+  // Pick a free revision so the UNIQUE(issueIdentity, revision)
+  // index never collides with a previously-resolved row.
+  const nextRevision = nextRevisionFor(worker, "schedule-decision", issueIdentity);
+  const item = await raiseAttention(worker, {
+    taskId: input.taskId ?? null,
+    kind: "schedule-decision",
+    issueIdentity,
+    revision: nextRevision,
+    payload: parsed,
+  });
+  return { kind: "created", item, issueIdentity };
+}
+
+export interface RaiseCiFailureInput {
+  taskId?: string | null;
+  payload: CiFailurePayloadInput;
+  windowMs?: number;
+  now?: Date;
+}
+
+export interface RaiseCiFailureResult {
+  readonly kind: "created" | "suppressed";
+  readonly item: AttentionItem;
+  readonly issueIdentity: string;
+}
+
+/**
+ * Raise a `ci-failure` attention row. The `issueIdentity` is sha256
+ * over the canonical payload (artifact + attempt + error digest +
+ * retry-exhausted flag). Repeated failures of the same artifact
+ * inside the dedup window collapse to the existing row.
+ */
+export async function raiseCiFailure(
+  worker: DbWorker,
+  input: RaiseCiFailureInput,
+): Promise<RaiseCiFailureResult> {
+  const parsed = ciFailurePayloadSchema.parse(input.payload);
+  const issueIdentity = digestStable({
+    kind: "ci-failure",
+    artifactSha256: parsed.artifactSha256,
+    lastErrorDigest: parsed.lastErrorDigest,
+    retryBudgetExhausted: parsed.retryBudgetExhausted,
+  });
+  const suppressed = shouldSuppressAttention(worker, "ci-failure", issueIdentity, {
+    windowMs: input.windowMs,
+    now: input.now,
+  });
+  if (suppressed) {
+    return { kind: "suppressed", item: suppressed.existingItem, issueIdentity };
+  }
+  // Pick a free revision so the UNIQUE(issueIdentity, revision)
+  // index never collides with a previously-resolved row.
+  const nextRevision = nextRevisionFor(worker, "ci-failure", issueIdentity);
+  const item = await raiseAttention(worker, {
+    taskId: input.taskId ?? null,
+    kind: "ci-failure",
+    issueIdentity,
+    revision: nextRevision,
+    payload: parsed,
+  });
+  return { kind: "created", item, issueIdentity };
 }
