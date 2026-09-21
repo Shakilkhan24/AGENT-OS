@@ -1,5 +1,5 @@
 import { lstat, mkdir, open, readlink, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 
 type Phase = "staged" | "verified" | "retained" | "previous-updated" | "published";
@@ -84,6 +84,11 @@ export async function publishRelease(options: ReleaseOptions) {
     await options.checkpoint?.("verified");
     await rename(staging, path.join(root, target));
     await syncDirectory(path.join(root, "builds"));
+    // M9.2: write the SHA-256 integrity manifest before any pointer moves,
+    // so the manifest is durable alongside the retained tree. The manifest
+    // is excluded from itself, so a later re-run is idempotent.
+    await writeIntegrityManifest(path.join(root, target));
+    await syncDirectory(path.join(root, target));
     await options.checkpoint?.("retained");
     if (old) await replacePointer(root, previous, old);
     await options.checkpoint?.("previous-updated");
@@ -104,4 +109,97 @@ export async function rollbackRelease(root: string, arch: string) {
   if (!target) throw new Error("No previous verified release is available");
   await replacePointer(root, `current-linux-${arch}`, target);
   return path.join(root, `current-linux-${arch}`, "minimal");
+}
+
+/**
+ * Walk every regular file under `root` and write a sorted
+ * `MANIFEST.sha256` of `<sha256>  <relative-path>` lines.
+ * Excludes any prior `MANIFEST.sha256` itself so re-running the
+ * writer on a manifest-bearing tree is idempotent.
+ *
+ * Returns the manifest path. The caller is responsible for
+ * `fsync`-ing the file before any `current-linux-` symlink move.
+ */
+export async function writeIntegrityManifest(root: string): Promise<string> {
+  const lines: string[] = [];
+  await collectLines(root, root, lines);
+  lines.sort((a, b) => (a.split("  ", 2)[1]! < b.split("  ", 2)[1]! ? -1 : 1));
+  const manifestPath = path.join(root, "MANIFEST.sha256");
+  const payload = lines.join("\n") + (lines.length > 0 ? "\n" : "");
+  const handle = await open(manifestPath, "wx", 0o644);
+  try { await handle.writeFile(payload); await handle.sync(); }
+  finally { await handle.close(); }
+  return manifestPath;
+}
+
+async function collectLines(
+  currentDir: string,
+  rootDir: string,
+  out: string[],
+): Promise<void> {
+  for (const entry of await readdir(currentDir, { withFileTypes: true })) {
+    const abs = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === ".package.lock") continue;
+      await collectLines(abs, rootDir, out);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (entry.name === "MANIFEST.sha256") continue;
+    const rel = path.relative(rootDir, abs);
+    const digest = await sha256OfFile(abs);
+    out.push(`${digest}  ${rel}`);
+  }
+}
+
+async function sha256OfFile(file: string): Promise<string> {
+  const handle = await open(file, "r");
+  try {
+    const hash = createHash("sha256");
+    for await (const chunk of handle.createReadStream()) {
+      hash.update(chunk as Buffer);
+    }
+    return hash.digest("hex");
+  } finally { await handle.close(); }
+}
+
+/**
+ * Verify the manifest against the current bytes of the tree.
+ * Returns the first mismatch (or `undefined` on success).
+ * Designed to be exercised by `scripts/verify-release.mts`.
+ */
+export async function verifyIntegrityManifest(root: string): Promise<
+  | { ok: true; fileCount: number }
+  | { ok: false; reason: "MANIFEST_MISSING" | "ENTRY_MISSING" | "DIGEST_MISMATCH"; detail: string }
+> {
+  const manifestPath = path.join(root, "MANIFEST.sha256");
+  let raw: string;
+  try {
+    const handle = await open(manifestPath, "r");
+    try { raw = await handle.readFile("utf8"); } finally { await handle.close(); }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { ok: false, reason: "MANIFEST_MISSING", detail: manifestPath };
+    throw error;
+  }
+  const lines = raw.split("\n").filter((line) => line.length > 0);
+  let fileCount = 0;
+  for (const line of lines) {
+    const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
+    if (!match) {
+      return { ok: false, reason: "MANIFEST_MISSING", detail: `Malformed manifest line: ${line}` };
+    }
+    const [, expected, rel] = match as unknown as [string, string, string];
+    const abs = path.join(root, rel);
+    try { await lstat(abs); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return { ok: false, reason: "ENTRY_MISSING", detail: rel };
+      throw error;
+    }
+    const actual = await sha256OfFile(abs);
+    if (actual !== expected)
+      return { ok: false, reason: "DIGEST_MISMATCH", detail: `${rel} expected=${expected} actual=${actual}` };
+    fileCount += 1;
+  }
+  return { ok: true, fileCount };
 }
