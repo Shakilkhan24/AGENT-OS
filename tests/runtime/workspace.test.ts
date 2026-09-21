@@ -69,7 +69,13 @@ test("headless socket workflow edits files, restores drafts and reconnects to th
 test("disconnect drains an accepted batch without cancelling its later members", { timeout: 10000 }, async t => {
   const f = await serviceFixture(), entered = deferred(), gate = deferred();
   const ownedDb = await ownedDbFixture();
-  const workspace = new RuntimeWorkspace(f.service, new DraftStore(f.store.directory), defaultSettings, null, "1.2.2", ownedDb);
+  const workspace = new RuntimeWorkspace(f.service, new DraftStore(f.store.directory), defaultSettings, null, "1.2.2", ownedDb, {
+    bootId: "test-boot",
+    bootedAtIso: new Date().toISOString(),
+    monotonicBasisMs: "0",
+    pid: process.pid,
+    nodeVersion: process.version,
+  });
   t.after(async () => { gate.resolve(); await workspace.close(); await ownedDb.close(); await f.cleanup(); });
   f.engine.beforeCreate = async () => { entered.resolve(); await gate.promise; };
   const endpoint = workspace.connect({ connectionId: crypto.randomUUID(), profileKey: "a".repeat(20), principal: "desktop" }, () => {});

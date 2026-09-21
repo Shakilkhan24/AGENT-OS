@@ -28,10 +28,18 @@ import {
   newAttempt,
   requestRunStop,
 } from "./orchestration/managed-actions";
+import { runWorkflow } from "./orchestration/workflow-execute";
+import { workflowResultSchema } from "../shared/workflow-executor-schema";
+import { mintBootIdentity, purgeStaleBootIdentities, type BootIdentity } from "./db/boot-identity";
 
 /** Domain ownership without Electron. One selected attachment is retained until M5. */
 export class RuntimeWorkspace {
   readonly incarnation = crypto.randomUUID();
+  /** M7.3 — per-process boot identity minted during `open()`. Every
+   *  schedule occurrence row carries this id so the dispatcher can
+   *  recognise rows owned by a prior (dead) boot and reconcile them
+   *  to `state: "unavailable"`. */
+  readonly bootIdentity: BootIdentity;
   private peers = new Map<string, { send: (message: ServerSignal) => void; endpoint: RuntimeEndpoint }>();
   private attachment?: { owner: string; view: Attachment };
   private generation = 0;
@@ -43,8 +51,10 @@ export class RuntimeWorkspace {
   /** M3c.1 — owned DB worker for M3a/M3b entities. Closed in `close()`. */
   private readonly ownedDb: OwnedDb;
   constructor(readonly service: SessionService, private drafts: DraftStore, readonly settings: Settings,
-    private recovery: string | null, private appVersion: string, ownedDb: OwnedDb) {
+    private recovery: string | null, private appVersion: string, ownedDb: OwnedDb,
+    bootIdentity: BootIdentity) {
     this.ownedDb = ownedDb;
+    this.bootIdentity = bootIdentity;
     this.inputQueue = new TerminalInputQueue(async (token, data) => {
       if (this.closing) throw new AppError("UNAVAILABLE", "Runtime is stopping");
       if (this.attachment?.view.token !== token)
@@ -74,7 +84,13 @@ export class RuntimeWorkspace {
     const ownedDb = await openManagedDatabase(directory, path.join(directory, "runtime"));
     try {
       await service.initialize();
-      const workspace = new RuntimeWorkspace(service, new DraftStore(directory, settings.draftLimit), settings, store.recoveredFromInvalid ?? null, appVersion, ownedDb);
+      // M7.3 — mint this process's boot identity, then garbage-collect
+      // any rows left behind by a prior Node process (the typical case
+      // for a clean restart; on a fresh install `purgeStale…` removes
+      // nothing because no boot-identity rows exist yet).
+      purgeStaleBootIdentities(ownedDb.driver);
+      const bootIdentity = mintBootIdentity(ownedDb.driver);
+      const workspace = new RuntimeWorkspace(service, new DraftStore(directory, settings.draftLimit), settings, store.recoveredFromInvalid ?? null, appVersion, ownedDb, bootIdentity);
       service.start(); return workspace;
     } catch (error) {
       await ownedDb.close().catch(() => {});
@@ -333,6 +349,34 @@ export class RuntimeWorkspace {
         return { runId: result.runId, status: result.status, blockedExecuteOnce: result.blockedExecuteOnce };
       } catch (error) {
         if (error instanceof AppError) throw new AppError("CONFLICT", error.message);
+        throw error;
+      }
+    });
+    // M6.1 — single workflow executor. The runtime validates the
+    // graph (cycles, fan-out, input refs), runs each step kind via
+    // its existing primitive seam (`executeOnce` / `verifyOnce` /
+    // `pinArtifact` / `readReview` / `execFile`), emits audit
+    // events, and returns the typed `WorkflowResult`. `AppError`
+    // and `z.ZodError` surface as a structured `{kind:
+    // "conflict", reason}` envelope so the renderer doesn't have
+    // to parse `Failure` shape — same pattern as the M3c.5 actions.
+    dispatcher.register("run-workflow", async ([input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const result = await runWorkflow(worker, input);
+        // Re-parse through the strict result schema before crossing
+        // the IPC boundary so a malformed in-process value never
+        // reaches the renderer.
+        const parsed = workflowResultSchema.parse(result);
+        return { kind: "ok" as const, result: parsed };
+      } catch (error) {
+        if (error instanceof AppError) {
+          return { kind: "conflict" as const, reason: error.message };
+        }
+        if (error instanceof z.ZodError) {
+          const first = error.issues[0]?.message ?? "invalid input";
+          return { kind: "conflict" as const, reason: first };
+        }
         throw error;
       }
     });
