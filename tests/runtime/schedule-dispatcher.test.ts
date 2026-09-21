@@ -164,6 +164,35 @@ test("M7 seedNextOccurrences populates N occurrences; idempotent on re-seed", as
   } finally { await worker.close(); }
 });
 
+test("M7.3 seedNextOccurrences records tzdata_version + boot_id + dispatch_state", async () => {
+  const worker = freshWorker();
+  try {
+    await upsertSchedule(worker, {
+      scheduleId: "s1", displayName: "Daily",
+      rule: { kind: "daily", hour: 9, minute: 0 },
+      timezone: "UTC", recipeId: "r1",
+    });
+    const rev = await publishScheduleRevision(worker, {
+      scheduleId: "s1",
+      rule: { kind: "daily", hour: 9, minute: 0 },
+      timezone: "UTC", recipeId: "r1",
+      publishedBy: "tester",
+    });
+    await promoteRevision(worker, "s1", rev.revision, "enabled");
+    const seeded = await seedNextOccurrences(worker, "s1", 1, {
+      now: () => new Date("2026-01-01T00:00:00Z"),
+      bootId: "boot-abc",
+      timezoneDataVersion: "icu:74.1",
+    });
+    assert.equal(seeded.length, 1);
+    const occurrence = seeded[0];
+    assert.equal(occurrence.bootId, "boot-abc");
+    assert.equal(occurrence.timezoneDataVersion, "icu:74.1");
+    assert.equal(occurrence.dispatchState, "pending");
+    assert.equal(occurrence.coalescedWith, null);
+  } finally { await worker.close(); }
+});
+
 test("M7 fireDueOccurrences dispatches due rows and calls the callback", async () => {
   const worker = freshWorker();
   try {

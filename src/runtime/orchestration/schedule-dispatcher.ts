@@ -262,7 +262,11 @@ export async function seedNextOccurrences(
   worker: DbWorker,
   scheduleId: string,
   count: number,
-  options: { now?: () => Date; timezoneDataVersion?: string } = {},
+  options: {
+    now?: () => Date;
+    timezoneDataVersion?: string;
+    bootId?: string;
+  } = {},
 ): Promise<ReadonlyArray<Occurrence>> {
   if (count < 1 || count > 64)
     throw new AppError("INVALID_REQUEST", "seed count must be in [1, 64]");
@@ -271,6 +275,15 @@ export async function seedNextOccurrences(
   const revision = readEnabledRevision(worker, scheduleId);
   if (!revision) return [];
   const now = options.now ? options.now() : new Date();
+  // M7.3 — record the timezone-data version so an audit reader can
+  // tell whether the wall-clock interpretation uses the bundled ICU
+  // tables (Node 22.12+) or a fallback. `process.versions.icu` is
+  // absent on stripped-down Node builds; the audit row carries
+  // `unknown` for those.
+  const tzVersion = options.timezoneDataVersion
+    ?? (typeof process.versions.icu === "string" && process.versions.icu.length > 0
+        ? `icu:${process.versions.icu}`
+        : "unknown");
   const seeded: Occurrence[] = [];
   let cursor = now;
   for (let i = 0; i < count; i += 1) {
@@ -281,7 +294,8 @@ export async function seedNextOccurrences(
       scheduleId, revision: revision.revision,
       intendedUtc: next.intendedUtc,
       localTimeIso: next.localTimeIso,
-      timezoneDataVersion: options.timezoneDataVersion ?? null,
+      timezoneDataVersion: tzVersion,
+      bootId: options.bootId ?? "",
     });
     if (inserted && inserted.created) seeded.push(inserted.occurrence);
   }
@@ -307,10 +321,12 @@ async function insertOccurrence(
     }
     driver.prepare(
       "INSERT INTO schedule_occurrence (uuid, schedule_id, revision, intended_utc, " +
-        "state, local_time_iso, timezone_data_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "state, local_time_iso, timezone_data_version, boot_id, coalesced_with, dispatch_state) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(
       randomUUID(), input.scheduleId, input.revision, input.intendedUtc,
-      "pending", input.localTimeIso, input.timezoneDataVersion,
+      "pending", input.localTimeIso, input.timezoneDataVersion, input.bootId ?? "",
+      null, "pending",
     );
     row = driver
       .prepare("SELECT * FROM schedule_occurrence WHERE schedule_id = ? AND revision = ? AND intended_utc = ?")
@@ -523,6 +539,13 @@ function parseOccurrenceRow(row: Record<string, unknown>): Occurrence {
     timezoneDataVersion: row.timezone_data_version == null ? null : String(row.timezone_data_version),
     dispatchedAt: row.dispatched_at == null ? null : String(row.dispatched_at),
     workflowRunId: row.workflow_run_uuid == null ? null : String(row.workflow_run_uuid),
+    // M7.3 — boot identity of the dispatcher that wrote the row.
+    // Empty string for v5 legacy rows that pre-date the column.
+    bootId: row.boot_id == null ? "" : String(row.boot_id),
+    coalescedWith: row.coalesced_with == null ? null : String(row.coalesced_with),
+    dispatchState: row.dispatch_state == null
+      ? "pending"
+      : String(row.dispatch_state) as Occurrence["dispatchState"],
   };
 }
 

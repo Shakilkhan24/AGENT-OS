@@ -121,6 +121,26 @@ export const occurrenceStateSchema = z.enum([
 ]);
 export type OccurrenceState = z.infer<typeof occurrenceStateSchema>;
 
+/** M7.3 — dispatch lifecycle state for an occurrence, distinct
+ *  from the workflow-run `state`. Independent so the controller can
+ *  record "ran into `pending` while the previous boot died" without
+ *  breaking the workflow-execution state machine. The audit log
+ *  (`occurrence_state_transition`) records every move between these
+ *  states; nothing is silently flipped. */
+export const occurrenceDispatchStateSchema = z.enum([
+  "pending",         // queued, not yet admitted
+  "dispatched",      // adapter accepted the dispatch
+  "executing",       // provider is running the recipe
+  "waiting-for-user",// blocked on a user-decision step
+  "disconnected",    // provider / socket went away mid-execution
+  "ended",           // dispatched run completed cleanly
+  "unavailable",     // previous boot died before reaching "dispatched"
+  "skipped",         // schedule policy refused to fire
+  "cancelled",       // user explicitly cancelled
+  "failed",          // provider or boot threw while executing
+]);
+export type OccurrenceDispatchState = z.infer<typeof occurrenceDispatchStateSchema>;
+
 export const occurrenceInputSchema = z
   .object({
     scheduleId: z.string().min(1).max(128),
@@ -130,6 +150,10 @@ export const occurrenceInputSchema = z
      *  (M7.2: DST skip / fold audit trail). */
     localTimeIso: z.string().datetime().nullable().default(null),
     timezoneDataVersion: z.string().min(1).max(64).nullable().default(null),
+    /** M7.3 — the boot that minted this occurrence. Recorded at
+     *  insert time so a later dispatcher can recognise rows owned
+     *  by a dead boot and reconcile them. */
+    bootId: z.string().min(1).max(64).nullable().default(null),
   })
   .strict();
 export type OccurrenceInput = z.input<typeof occurrenceInputSchema>;
@@ -145,6 +169,20 @@ export const occurrenceSchema = z
     dispatchedAt: z.string().datetime().nullable(),
     /** Optional workflow run id once the recipe has been dispatched. */
     workflowRunId: z.string().uuid().nullable(),
+    /** M7.3 — boot identity of the dispatcher that last touched the
+     *  row. Empty string when the row pre-dates the v6 schema (the
+     *  migration helper adds the column with an empty default). */
+    bootId: z.string().min(0).max(64),
+    /** M7.2 — when this occurrence was coalesced into a later
+     *  firing, the prior row's UUID is recorded here for the audit
+     *  trail. Null when no coalescing happened. */
+    coalescedWith: z.string().uuid().nullable(),
+    /** M7.3 — the dispatch lifecycle state. Independent of `state`
+     *  (which is the workflow-run lifecycle). The dispatcher uses
+     *  `state` to skip already-fired rows; the controller uses
+     *  `dispatch_state` to recognise "this row was waiting in
+     *  `pending` when the previous boot died". */
+    dispatchState: occurrenceDispatchStateSchema,
   })
   .strict();
 export type Occurrence = z.infer<typeof occurrenceSchema>;
