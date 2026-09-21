@@ -103,6 +103,11 @@ export class SqliteDatabase implements Database {
     return Number((row as { value: number }).value);
   }
   flush(): void { this.connection.exec("PRAGMA wal_checkpoint(TRUNCATE)"); }
+  /** M7 — migration seam. Pass raw DDL (e.g. `ALTER TABLE …`) that
+   *  the prepared-statement path rejects because it expects `?`
+   *  placeholders. The bundled `node:sqlite` engine natively
+   *  supports multi-statement exec. */
+  exec(sql: string): void { this.connection.exec(sql); }
   close(): void { if (this.closed) return; this.connection.close(); this.closed = true; }
 }
 

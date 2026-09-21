@@ -61,6 +61,16 @@ export interface Database {
   flush(): void;
   /** Close the underlying connection. After `close`, every call throws. */
   close(): void;
+  /**
+   * Optional: run one or more SQL statements with no bindings.
+   * Used for migration DDL (`ALTER TABLE …`) which the
+   * prepared-statement path rejects because the bindings API expects
+   * `?` placeholders. Tests using the in-memory driver leave this
+   * undefined (its driver starts fresh with the latest schema so
+   * migration isn't needed). Production SQLite exposes it via the
+   * bundled `node:sqlite` native `exec`.
+   */
+  exec?(sql: string): void;
 }
 
 /** Strongly-typed wrapper around a row + a Zod schema that validates it. */

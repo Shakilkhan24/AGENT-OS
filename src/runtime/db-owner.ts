@@ -27,7 +27,8 @@ import { type Database } from "./db/types";
 import { DbWorker } from "./db/worker";
 import { SqliteDatabase, hasSqliteBuiltin } from "./db/sqlite";
 import { MemoryDatabase } from "./db/memory";
-import { tableSpecs } from "./db/schema";
+import { tableSpecs, SCHEMA_VERSION } from "./db/schema";
+import { ensureScheduleColumns } from "./db/migrations/ensure-schedule-columns";
 
 export interface OwnedDb {
   readonly worker: DbWorker;
@@ -61,7 +62,15 @@ export async function openManagedDatabase(dataDir: string, runtimeDir: string): 
   const driver: Database = useSqlite
     ? await openSqliteDriver(dataDir, runtimeDir)
     : new MemoryDatabase();
-  try { applySchema(driver, useSqlite); }
+  try {
+    applySchema(driver, useSqlite);
+    // M7.1/M7.3 — bump v5 → v6 by adding schedule audit columns +
+    // the new occurrence_state_transition table. `applySchema` already
+    // ran with `CREATE TABLE IF NOT EXISTS`, so a fresh install has
+    // the v6 columns in place (the helper short-circuits on v6). An
+    // existing v5 store has its columns added via ALTER TABLE.
+    upgradeSchemaToCurrent(driver, useSqlite);
+  }
   catch (error) { driver.close(); throw error; }
   const worker = new DbWorker({ driver });
   let closed = false;
@@ -100,4 +109,37 @@ function applySchema(driver: Database, sqlite: boolean): void {
       for (const index of table.indices) driver.prepare(ddl(index)).run();
     }
   });
+}
+
+/**
+ * M7.1/M7.3 — bring a previously-opened store forward to
+ * `SCHEMA_VERSION`. On a fresh install `applySchema` already created
+ * the v6 columns + tables (CREATE TABLE IF NOT EXISTS), so this is a
+ * no-op. On an existing v5 store it runs the idempotent
+ * `ensureScheduleColumns` seam and stamps `PRAGMA user_version` so
+ * the next open skips the migration.
+ *
+ * The memory driver has no `PRAGMA user_version` support (it's a
+ * pure in-memory stub) and starts fresh with the v6 schema from
+ * `applySchema`; both make the migration a no-op here.
+ */
+function upgradeSchemaToCurrent(driver: Database, sqlite: boolean): void {
+  if (!sqlite) return; // memory driver is fresh per `new MemoryDatabase()`
+  const current = readUserVersion(driver);
+  if (current >= SCHEMA_VERSION) return; // already at v6
+  ensureScheduleColumns(driver);
+  // Stamp `user_version` so the next open skips the migration seam.
+  // The M5.6 lifecycle-columns migration does not bump user_version;
+  // M7 is the first one to do so. The PRAGMA is a side-effecting
+  // statement that returns no rows — `node:sqlite` accepts it via
+  // the regular `prepare/run` path.
+  driver.prepare(`PRAGMA user_version = ${Number(SCHEMA_VERSION)}`).run();
+}
+
+/** Read `PRAGMA user_version`. Returns 0 for stores that have never
+ *  set the value (the default). */
+function readUserVersion(driver: Database): number {
+  const row = driver.prepare("PRAGMA user_version").first();
+  const raw = (row as { user_version?: number } | undefined)?.user_version;
+  return typeof raw === "number" ? raw : 0;
 }

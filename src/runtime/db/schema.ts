@@ -38,6 +38,12 @@ import {
 const rowId = "id INTEGER PRIMARY KEY AUTOINCREMENT";
 const uuidColumn = "uuid TEXT NOT NULL UNIQUE";
 
+/** M6.4 schema-version: bumped to introduce the `owner_identity`
+ *  column on `workflow_run` so durable workflow execution can
+ *  revalidate ownership before continuation. Older workers refuse
+ *  to open a DB tagged with a newer SCHEMA_VERSION. */
+export const SCHEMA_VERSION = 6;
+
 export interface TableSpec {
   /** Logical entity name; must be a stable identifier used in audits. */
   readonly name: string;
@@ -46,8 +52,6 @@ export interface TableSpec {
   /** Indices created alongside the table. */
   readonly indices: readonly string[];
 }
-
-export const SCHEMA_VERSION = 1;
 
 /**
  * DDL statements. Designed for `node:sqlite` (and our in-memory driver); all
@@ -490,6 +494,281 @@ export const tableSpecs: readonly TableSpec[] = [
       "CREATE INDEX review_status_idx ON review(status)",
     ],
   },
+  // M6.4 — durable workflow execution state. A `workflow_run` row is
+  // inserted by `runWorkflow` BEFORE any step is dispatched so a crash
+  // during the run is recoverable: the `resumeWorkflow` function
+  // walks the persisted graph + completed step outputs and continues
+  // from the next ready step. Cancellation intent is written to
+  // `cancel_requested_at`; the executor observes it on the next tick.
+  //
+  // `owner_identity` captures the principal authorized to continue
+  // the run (e.g. workspace session identity, user identity for the
+  // active profile). On resume, the supplied `ownerIdentity` MUST
+  // match the persisted value — this is the "revalidate before
+  // continuation" gate from the M6.4 spec.
+  {
+    name: "workflow_run",
+    ddl: `CREATE TABLE workflow_run (
+      ${rowId},
+      ${uuidColumn},
+      workflow_id TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'running',
+      created_by TEXT NOT NULL DEFAULT '',
+      owner_identity TEXT NOT NULL DEFAULT '',
+      settings_json TEXT NOT NULL DEFAULT '{}',
+      graph_json TEXT NOT NULL,
+      cancel_requested_at TEXT,
+      cancel_requested_by TEXT,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      terminal_outcome TEXT,
+      audit_digest TEXT
+    )`,
+    indices: [
+      "CREATE INDEX workflow_run_status_idx ON workflow_run(status)",
+    ],
+  },
+  // M6.4 — per-step output. Persisted BEFORE the step's `remaining`
+  // entry is removed so a crash between commit and the next dispatch
+  // cannot lose the output. The `output_digest` is the SHA-256 over
+  // the canonical JSON of `output_json`, mirroring the audit-event
+  // digest surface so two outputs with the same shape compare equal.
+  {
+    name: "workflow_step_output",
+    ddl: `CREATE TABLE workflow_step_output (
+      ${rowId},
+      ${uuidColumn},
+      workflow_run_uuid TEXT NOT NULL REFERENCES workflow_run(uuid) ON DELETE CASCADE,
+      step_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      output_json TEXT NOT NULL,
+      output_digest TEXT NOT NULL,
+      completed_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE UNIQUE INDEX workflow_step_output_run_step_idx ON workflow_step_output(workflow_run_uuid, step_id)",
+    ],
+  },
+  // M6.4 — per-step durable state. Carries:
+  //   - `state`         running | waiting | completed | failed | cancelled
+  //   - `wake_at`        for `wait` and `approval` steps, the wall-clock
+  //                       timestamp at which the executor may resume;
+  //   - `failure_json`   populated on terminal `failed` / `cancelled`;
+  // The combination of (run_uuid, step_id) is unique so a resume
+  // upserts and never collides.
+  {
+    name: "workflow_step_state",
+    ddl: `CREATE TABLE workflow_step_state (
+      ${rowId},
+      ${uuidColumn},
+      workflow_run_uuid TEXT NOT NULL REFERENCES workflow_run(uuid) ON DELETE CASCADE,
+      step_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'running',
+      dispatched_at TEXT,
+      wake_at TEXT,
+      failure_json TEXT,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE UNIQUE INDEX workflow_step_state_run_step_idx ON workflow_step_state(workflow_run_uuid, step_id)",
+      "CREATE INDEX workflow_step_state_state_idx ON workflow_step_state(state)",
+    ],
+  },
+  // M7 — durable schedule layer. Three tables:
+  //   - `schedule`              — one row per schedule identity;
+  //   - `schedule_revision`     — one row per rule/recipe/tz revision;
+  //   - `schedule_occurrence`   — one row per intended firing,
+  //                                unique on `(schedule_id, revision,
+  //                                intended_utc)`.
+  // The dispatcher (`fireDueOccurrences`) reads pending rows with
+  // `intended_utc <= now`, transitions them to `dispatched`, and
+  // hands the recipe id to the workflow executor.
+  {
+    name: "schedule",
+    ddl: `CREATE TABLE schedule (
+      ${rowId},
+      ${uuidColumn},
+      schedule_id TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      timezone TEXT NOT NULL,
+      recipe_id TEXT NOT NULL,
+      overlap_policy TEXT NOT NULL DEFAULT 'skip',
+      grace_window_ms INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'enabled',
+      host_id TEXT NOT NULL DEFAULT '',
+      tzdata_version TEXT NOT NULL DEFAULT '',
+      boot_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    indices: [
+      "CREATE INDEX schedule_status_idx ON schedule(status)",
+    ],
+  },
+  {
+    name: "schedule_revision",
+    ddl: `CREATE TABLE schedule_revision (
+      ${rowId},
+      ${uuidColumn},
+      schedule_id TEXT NOT NULL REFERENCES schedule(schedule_id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL,
+      rule_json TEXT NOT NULL,
+      timezone TEXT NOT NULL,
+      recipe_id TEXT NOT NULL,
+      overlap_policy TEXT NOT NULL DEFAULT 'skip',
+      grace_window_ms INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'draft',
+      revision_digest TEXT NOT NULL,
+      published_at TEXT NOT NULL,
+      published_by TEXT NOT NULL DEFAULT '',
+      host_id TEXT NOT NULL DEFAULT ''
+    )`,
+    indices: [
+      "CREATE UNIQUE INDEX schedule_revision_id_rev_idx ON schedule_revision(schedule_id, revision)",
+      "CREATE INDEX schedule_revision_status_idx ON schedule_revision(status)",
+    ],
+  },
+  {
+    name: "schedule_occurrence",
+    ddl: `CREATE TABLE schedule_occurrence (
+      ${rowId},
+      ${uuidColumn},
+      schedule_id TEXT NOT NULL REFERENCES schedule(schedule_id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL,
+      intended_utc TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      local_time_iso TEXT,
+      timezone_data_version TEXT,
+      dispatched_at TEXT,
+      workflow_run_uuid TEXT,
+      boot_id TEXT NOT NULL DEFAULT '',
+      coalesced_with TEXT,
+      dispatch_state TEXT NOT NULL DEFAULT 'pending'
+    )`,
+    indices: [
+      "CREATE UNIQUE INDEX schedule_occurrence_unique_idx ON schedule_occurrence(schedule_id, revision, intended_utc)",
+      "CREATE INDEX schedule_occurrence_state_idx ON schedule_occurrence(state)",
+      "CREATE INDEX schedule_occurrence_intended_idx ON schedule_occurrence(intended_utc)",
+      "CREATE INDEX schedule_occurrence_dispatch_state_idx ON schedule_occurrence(dispatch_state)",
+      "CREATE INDEX schedule_occurrence_boot_id_idx ON schedule_occurrence(boot_id)",
+    ],
+  },
+  // -----------------------------------------------------------------
+  // M7.3 — occurrence state transition audit log
+  //
+  // One row per state move on a `schedule_occurrence` row. Records
+  // both wall-clock ISO timestamp AND the monotonic-ms since the
+  // boot's basis so audit readers can confirm "this row was moved
+  // during boot X". Indexed by `occurrence_id` + `recorded_at`.
+  // -----------------------------------------------------------------
+  {
+    name: "occurrence_state_transition",
+    ddl: `CREATE TABLE occurrence_state_transition (
+      ${rowId},
+      ${uuidColumn},
+      occurrence_uuid TEXT NOT NULL,
+      from_state TEXT NOT NULL,
+      to_state TEXT NOT NULL,
+      monotonic_ms_since_boot INTEGER NOT NULL,
+      wall_clock_iso TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      recorded_by TEXT NOT NULL DEFAULT ''
+    )`,
+    indices: [
+      "CREATE INDEX occurrence_state_transition_occurrence_idx ON occurrence_state_transition(occurrence_uuid)",
+      "CREATE INDEX occurrence_state_transition_wall_clock_idx ON occurrence_state_transition(wall_clock_iso)",
+    ],
+  },
+  // -----------------------------------------------------------------
+  // M8 — owned remote execution
+  // -----------------------------------------------------------------
+  //   - `owned_remote_host`    — one row per SSH host identity.
+  //   - `owned_remote_session` — a prepared session for a host.
+  //   - `owned_remote_receipt` — a per-host install / capability receipt.
+  //   - `owned_remote_invoke`  — a remote invocation record (mirrors
+  //                              workflow_run for the remote path).
+  {
+    name: "owned_remote_host",
+    ddl: `CREATE TABLE owned_remote_host (
+      ${rowId},
+      ${uuidColumn},
+      host_id TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      ssh_target TEXT NOT NULL,
+      host_key_fingerprint TEXT NOT NULL,
+      auth_kind TEXT NOT NULL,
+      capabilities_json TEXT NOT NULL,
+      last_probed_at TEXT,
+      last_probed_runtime TEXT,
+      registered_at TEXT NOT NULL,
+      registered_by TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'reachable',
+    )`,
+    indices: [
+      "CREATE INDEX owned_remote_host_status_idx ON owned_remote_host(status)",
+    ],
+  },
+  {
+    name: "owned_remote_session",
+    ddl: `CREATE TABLE owned_remote_session (
+      ${rowId},
+      ${uuidColumn},
+      host_id TEXT NOT NULL REFERENCES owned_remote_host(host_id) ON DELETE CASCADE,
+      handle_id TEXT NOT NULL UNIQUE,
+      pin_digest TEXT NOT NULL,
+      workspace_path TEXT NOT NULL,
+      prepared_at TEXT NOT NULL,
+      last_observed_at TEXT,
+      last_observed_runtime TEXT,
+      status TEXT NOT NULL DEFAULT 'ready',
+    )`,
+    indices: [
+      "CREATE INDEX owned_remote_session_host_idx ON owned_remote_session(host_id)",
+      "CREATE INDEX owned_remote_session_status_idx ON owned_remote_session(status)",
+    ],
+  },
+  {
+    name: "owned_remote_receipt",
+    ddl: `CREATE TABLE owned_remote_receipt (
+      ${rowId},
+      ${uuidColumn},
+      host_id TEXT NOT NULL REFERENCES owned_remote_host(host_id) ON DELETE CASCADE,
+      receipt_kind TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      digest TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      recorded_by TEXT NOT NULL,
+      detail_json TEXT,
+    )`,
+    indices: [
+      "CREATE INDEX owned_remote_receipt_host_idx ON owned_remote_receipt(host_id)",
+    ],
+  },
+  {
+    name: "owned_remote_invoke",
+    ddl: `CREATE TABLE owned_remote_invoke (
+      ${rowId},
+      ${uuidColumn},
+      host_id TEXT NOT NULL REFERENCES owned_remote_host(host_id) ON DELETE CASCADE,
+      handle_id TEXT NOT NULL,
+      recipe_id TEXT NOT NULL,
+      recipe_version INTEGER NOT NULL,
+      invocation_id TEXT NOT NULL UNIQUE,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      status TEXT NOT NULL DEFAULT 'in-flight',
+      last_observed_at TEXT,
+      cursor INTEGER NOT NULL DEFAULT 0,
+      remote_state TEXT,
+      remote_exit_code INTEGER,
+      remote_stderr_tail TEXT,
+    )`,
+    indices: [
+      "CREATE INDEX owned_remote_invoke_host_idx ON owned_remote_invoke(host_id)",
+      "CREATE INDEX owned_remote_invoke_status_idx ON owned_remote_invoke(status)",
+    ],
+  },
 ];
 
 export const terminalRowSchema = z.object({
@@ -553,3 +832,53 @@ export const contextReceiptRowSchema = contextReceiptSchema.extend({ uuid: z.str
 export const verificationRecipeRowSchema = verificationRecipeSchema.extend({ uuid: z.string().uuid() });
 export const verificationRowSchema = verificationSchema.extend({ uuid: z.string().uuid() });
 export const reviewRowSchema = reviewSchema.extend({ uuid: z.string().uuid() });
+
+// M6.4 — workflow run row schemas. These mirror the SQL column layout
+// (snake_case) so the helpers in `src/runtime/db/workflow-runs.ts`
+// can map rows directly without an additional renames pass.
+export const workflowRunRowSchema = z
+  .object({
+    uuid: z.string().uuid(),
+    workflow_id: z.string().min(1).max(128),
+    status: z.enum(["running", "completed", "failed", "cancelled"]),
+    created_by: z.string().min(0).max(256),
+    owner_identity: z.string().min(0).max(256),
+    settings_json: z.string(),
+    graph_json: z.string(),
+    cancel_requested_at: z.string().nullable(),
+    cancel_requested_by: z.string().nullable(),
+    started_at: z.string().datetime(),
+    ended_at: z.string().datetime().nullable(),
+    terminal_outcome: z.enum(["completed", "failed", "cancelled"]).nullable(),
+    audit_digest: z.string().nullable(),
+  })
+  .strict();
+export type WorkflowRunRow = z.infer<typeof workflowRunRowSchema>;
+
+export const workflowStepOutputRowSchema = z
+  .object({
+    uuid: z.string().uuid(),
+    workflow_run_uuid: z.string().uuid(),
+    step_id: z.string().min(1).max(128),
+    kind: z.string().min(1).max(64),
+    output_json: z.string(),
+    output_digest: z.string().regex(/^[0-9a-f]{64}$/),
+    completed_at: z.string().datetime(),
+  })
+  .strict();
+export type WorkflowStepOutputRow = z.infer<typeof workflowStepOutputRowSchema>;
+
+export const workflowStepStateRowSchema = z
+  .object({
+    uuid: z.string().uuid(),
+    workflow_run_uuid: z.string().uuid(),
+    step_id: z.string().min(1).max(128),
+    kind: z.string().min(1).max(64),
+    state: z.enum(["running", "waiting", "completed", "failed", "cancelled"]),
+    dispatched_at: z.string().datetime().nullable(),
+    wake_at: z.string().datetime().nullable(),
+    failure_json: z.string().nullable(),
+    updated_at: z.string().datetime(),
+  })
+  .strict();
+export type WorkflowStepStateRow = z.infer<typeof workflowStepStateRowSchema>;
