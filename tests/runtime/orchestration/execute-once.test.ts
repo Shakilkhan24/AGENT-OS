@@ -19,6 +19,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DbWorker } from "../../../src/runtime/db/worker";
 import { MemoryDatabase } from "../../../src/runtime/db/memory";
+import { SqliteDatabase, hasSqliteBuiltin } from "../../../src/runtime/db/sqlite";
 import { tableSpecs } from "../../../src/runtime/db/schema";
 import { createTask } from "../../../src/runtime/db/tasks";
 import { createRun } from "../../../src/runtime/db/runs";
@@ -67,6 +68,61 @@ function adapterFromDouble(double: ProviderAdapter) {
   setExecuteOnceAdapter(() => double);
   return () => resetExecuteOnceAdapter();
 }
+
+// Concurrent-dispatch isolation is enforced by SQLite's BEGIN IMMEDIATE
+// semantics; the in-process MemoryDatabase is a test-only fallback that
+// does not provide cross-handle isolation. Skip when the runtime is Node
+// < 22.5 (no built-in `node:sqlite`).
+const sqliteRequired = hasSqliteBuiltin() ? test : test.skip;
+
+for (const existing of [false, true]) sqliteRequired(`concurrent dispatch is exclusive with a ${existing ? "persisted pending" : "new"} invocation`, async () => {
+  const driver = new SqliteDatabase(":memory:");
+  for (const table of tableSpecs) {
+    driver.prepare(table.ddl).run();
+    for (const index of table.indices) driver.prepare(index).run();
+  }
+  const worker = new DbWorker({ driver });
+  const double = new ScriptedProviderDouble();
+  const handles: Awaited<ReturnType<ProviderAdapter["spawn"]>>[] = [];
+  let spawns = 0;
+  setExecuteOnceAdapter(() => ({
+    kind: "scripted", capabilities: () => double.capabilities(),
+    async spawn(req) {
+      spawns++;
+      await new Promise(resolve => setTimeout(resolve, 20));
+      const handle = await double.spawn(req); handles.push(handle); return handle;
+    },
+  }));
+  try {
+    const input = baseInput(await setupRun(worker));
+    if (existing) await createInvocation(worker, {
+      runId: input.runId, idempotencyKey: input.idempotencyKey, canonicalDigest: input.canonicalDigest,
+      providerVersion: input.providerVersion, model: input.model, accountMode: input.accountMode,
+    });
+    const results = await Promise.allSettled([executeOnce(worker, input), executeOnce(worker, input)]);
+    assert.equal(spawns, 1, "the durable claim must precede the external spawn");
+    assert.ok(results.every(result => result.status === "fulfilled"), "a matching retry must not fail with SQL uniqueness errors");
+    assert.equal((await listDispatchIntentsForRun(worker, input.runId)).length, 1);
+  } finally {
+    handles.forEach(handle => handle.stdin.close());
+    resetExecuteOnceAdapter(); await worker.close();
+  }
+});
+
+test("an adapter spawn error leaves a durable claim and cannot be retried as a new spawn", async () => {
+  const worker = freshWorker();
+  let spawns = 0;
+  setExecuteOnceAdapter(() => ({ kind: "scripted", capabilities: () => new ScriptedProviderDouble().capabilities(),
+    async spawn() { spawns++; throw new Error("spawn acknowledgement lost"); } }));
+  try {
+    const input = baseInput(await setupRun(worker));
+    const first = await executeOnce(worker, input);
+    const retry = await executeOnce(worker, input);
+    assert.equal(first.kind, "ambiguous");
+    assert.equal(retry.kind, "ambiguous");
+    assert.equal(spawns, 1);
+  } finally { resetExecuteOnceAdapter(); await worker.close(); }
+});
 
 test("first dispatch lands invocation through admitted → spawned and yields a working handle", async () => {
   const worker = freshWorker();

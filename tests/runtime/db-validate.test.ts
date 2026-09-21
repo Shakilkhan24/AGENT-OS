@@ -17,9 +17,9 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { DbWorker } from "../../src/runtime/db/worker";
 import { MemoryDatabase } from "../../src/runtime/db/memory";
-import { tableSpecs } from "../../src/runtime/db/schema";
 import { importLegacyState } from "../../src/runtime/db/import";
 import { activateStore, loadActiveStore, validateImportedStore } from "../../src/runtime/db/validate";
+import { SCHEMA_VERSION, tableSpecs } from "../../src/runtime/db/schema";
 import { defaultSettings } from "../../src/shared/settings";
 
 async function freshWorker(): Promise<DbWorker> {
@@ -66,9 +66,9 @@ test("activateStore writes an immutable locator and loadActiveStore reads it bac
   const report = await importLegacyState({ dataDir: fixture.dataDir, worker });
   const controlDir = await mkdtemp(path.join(tmpdir(), "minimal-ctrl-"));
   t.after(() => rm(controlDir, { recursive: true, force: true }));
-  const activated = await activateStore({ paths: { controlDir, dataDir: fixture.dataDir }, worker, manifest: report.manifest });
+  await activateStore({ paths: { controlDir, dataDir: fixture.dataDir }, worker, manifest: report.manifest });
   const loaded = await loadActiveStore(controlDir);
-  assert.equal(loaded.schemaVersion, activated.checks ? 1 : 1);
+  assert.equal(loaded.schemaVersion, SCHEMA_VERSION);
   assert.equal(loaded.manifest.importedCounts.sessions, 1);
 });
 

@@ -378,7 +378,20 @@ export class MemoryDatabase implements Database {
     const clauses = conjuncts.map(part => {
       const disjuncts = part.split(/\s+or\s+/i);
       const atoms = disjuncts.map(sub => {
-        const match = sub.match(/^\s*\(?\s*([a-z_][a-z0-9_]*)\s*(=|is|!=)\s*(\?+|\d+|null|true|false|'[^']*')\s*\)?\s*$/i);
+        // Optional `NOT` prefix for `NOT IN (...)`.
+        const notInMatch = sub.match(/^\s*([a-z_][a-z0-9_]*)\s+not\s+in\s*\(\s*(.+?)\s*\)\s*$/i);
+        if (notInMatch) {
+          const column = notInMatch[1];
+          const values = notInMatch[2].split(",").map(part => this.parseLiteralOrPlaceholder(part.trim()));
+          return (row: Row) => !values.some(value => row[column] === this.resolveValue(value, bindings));
+        }
+        const inMatch = sub.match(/^\s*([a-z_][a-z0-9_]*)\s+in\s*\(\s*(.+?)\s*\)\s*$/i);
+        if (inMatch) {
+          const column = inMatch[1];
+          const values = inMatch[2].split(",").map(part => this.parseLiteralOrPlaceholder(part.trim()));
+          return (row: Row) => values.some(value => row[column] === this.resolveValue(value, bindings));
+        }
+        const match = sub.match(/^\s*\(?\s*([a-z_][a-z0-9_]*)\s*(<=|>=|<|>|=|is|!=)\s*(\?+|\d+|null|true|false|'[^']*')\s*\)?\s*$/i);
         if (!match) throw new Error(`Unsupported predicate: ${sub}`);
         const column = match[1];
         const operator = match[2].toLowerCase();
@@ -388,8 +401,16 @@ export class MemoryDatabase implements Database {
           (value as { param: number }).param = nextIndex();
         }
         const resolved = (_row: Row) => this.resolveValue(value, bindings);
-        if (operator === "=" || operator === "is") return (row: Row) => resolved(row) === row[column];
-        return (row: Row) => resolved(row) !== row[column];
+        const left = (row: Row): Value => row[column] as Value;
+        switch (operator) {
+          case "=": case "is": return (row: Row) => resolved(row) === row[column];
+          case "!=": return (row: Row) => resolved(row) !== row[column];
+          case "<": return (row: Row) => this.compareValues(left(row), resolved(row) as Value) < 0;
+          case "<=": return (row: Row) => this.compareValues(left(row), resolved(row) as Value) <= 0;
+          case ">": return (row: Row) => this.compareValues(left(row), resolved(row) as Value) > 0;
+          case ">=": return (row: Row) => this.compareValues(left(row), resolved(row) as Value) >= 0;
+          default: throw new Error(`Unsupported operator: ${operator}`);
+        }
       });
       return (row: Row) => atoms.some(atom => atom(row));
     });
@@ -410,5 +431,18 @@ export class MemoryDatabase implements Database {
   private resolveValue(value: Value | { param: number }, bindings: Bindings): Value {
     if (value && typeof value === "object" && "param" in value) return bindings[value.param];
     return value as Value;
+  }
+
+  /** Three-way comparator for `<`/`<=`/`>`/`>=` predicates. Nulls sort
+   *  after every concrete value so `WHERE x < null` is always false. */
+  private compareValues(left: Value | undefined, right: Value | undefined): number {
+    if (left === right) return 0;
+    if (left === null || left === undefined) return 1;
+    if (right === null || right === undefined) return -1;
+    if (typeof left === "number" && typeof right === "number") return left - right;
+    if (typeof left === "bigint" && typeof right === "bigint") return left < right ? -1 : left > right ? 1 : 0;
+    if (typeof left === "string" && typeof right === "string") return left < right ? -1 : left > right ? 1 : 0;
+    if (typeof left === "boolean" && typeof right === "boolean") return Number(left) - Number(right);
+    return String(left) < String(right) ? -1 : String(left) > String(right) ? 1 : 0;
   }
 }

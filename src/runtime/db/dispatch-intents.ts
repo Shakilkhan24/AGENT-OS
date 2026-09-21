@@ -47,6 +47,32 @@ const recordIntentSchema = z.object({
 }).strict();
 export type RecordIntentInput = z.input<typeof recordIntentSchema>;
 
+/** Atomically fence a pending invocation and retain its one spawn intent. */
+export async function claimInvocationDispatch(worker: DbWorker, input: RecordIntentInput): Promise<DispatchIntent | undefined> {
+  const parsed = recordIntentSchema.parse(input);
+  if (!parsed.invocationId) throw new AppError("INVALID_REQUEST", "A dispatch claim requires an invocation");
+  const driver = driverOf(worker);
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  const claimed = await worker.transaction(() => {
+    const row = driver.prepare("SELECT status, run_id FROM invocation WHERE uuid = ?").first(parsed.invocationId);
+    if (!row || row.run_id !== parsed.runId) throw new AppError("NOT_FOUND", "Invocation does not belong to this run");
+    if (row.status !== "pending") return false;
+    // Older builds could leave a pending invocation after attempting a spawn.
+    // An existing intent is uncertain evidence, never permission to respawn.
+    if (driver.prepare("SELECT uuid FROM dispatch_intent WHERE invocation_id = ?").first(parsed.invocationId)) return false;
+    driver.prepare(
+      "INSERT INTO dispatch_intent (uuid, run_id, invocation_id, method, args_json, scope_json, deadline_at, state, claimed_at, created_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(id, parsed.runId, parsed.invocationId, parsed.method, JSON.stringify(parsed.args),
+      JSON.stringify(parsed.scope), parsed.deadlineAt, "claimed", now, now);
+    driver.prepare("UPDATE invocation SET status = ?, started_at = ? WHERE uuid = ?")
+      .run("admitted", now, parsed.invocationId);
+    return true;
+  });
+  return claimed ? readDispatchIntent(worker, id) : undefined;
+}
+
 export async function recordDispatchIntent(worker: DbWorker, input: RecordIntentInput): Promise<DispatchIntent> {
   const parsed = recordIntentSchema.parse(input);
   const driver = driverOf(worker);

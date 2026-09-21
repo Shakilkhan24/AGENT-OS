@@ -55,20 +55,21 @@ export type CreateInvocationInput = z.input<typeof createInvocationSchema>;
 export async function createInvocation(worker: DbWorker, input: CreateInvocationInput): Promise<Invocation> {
   const parsed = createInvocationSchema.parse(input);
   const driver = driverOf(worker);
-  // Same (runId, idempotencyKey) returns the existing invocation — idempotency
-  // for retried callers.
-  const existing = driver.prepare("SELECT * FROM invocation WHERE run_id = ? AND idempotency_key = ?")
-    .first(parsed.runId, parsed.idempotencyKey);
-  if (existing) {
-    const parsed2 = parseInvocationRow(existing);
-    if (parsed2.canonicalDigest !== parsed.canonicalDigest)
-      throw new AppError("CONFLICT", `Idempotency key ${parsed.idempotencyKey} was reused with a different request digest`);
-    return parsed2;
-  }
-  const id = randomUUID();
+  let id: string = randomUUID();
   const now = new Date().toISOString();
   await worker.transaction(tx => {
     void tx;
+    // The lookup and insert must share a transaction: concurrent matching
+    // requests return the same identity instead of racing a UNIQUE constraint.
+    const existing = driver.prepare("SELECT * FROM invocation WHERE run_id = ? AND idempotency_key = ?")
+      .first(parsed.runId, parsed.idempotencyKey);
+    if (existing) {
+      const invocation = parseInvocationRow(existing);
+      if (invocation.canonicalDigest !== parsed.canonicalDigest)
+        throw new AppError("CONFLICT", `Idempotency key ${parsed.idempotencyKey} was reused with a different request digest`);
+      id = invocation.id;
+      return;
+    }
     const runExists = driver.prepare("SELECT uuid FROM run WHERE uuid = ?").first(parsed.runId);
     if (!runExists) throw new AppError("NOT_FOUND", "Run not found");
     driver.prepare(
