@@ -293,8 +293,11 @@ function makeLocalTime(date: Date, hour: number, minute: number, timezone: strin
   const adjusted = new Date(guess.getTime() - offset);
   // Verify the adjusted UTC instant, when rendered in the timezone,
   // really has the requested hour/minute. If not, it's a DST gap.
+  // M7 GATE — Intl's `hour12: false` formatter renders midnight as
+  // `"24"` (not `"00"`); normalise to the canonical 0..23 range so a
+  // daily 00:00 rule does not register as a false-positive gap.
   const verifyParts = formatter.formatToParts(adjusted);
-  const vH = Number(verifyParts.find((p) => p.type === "hour")?.value ?? "0");
+  const vH = Number(verifyParts.find((p) => p.type === "hour")?.value ?? "0") % 24;
   const vM = Number(verifyParts.find((p) => p.type === "minute")?.value ?? "0");
   if (vH !== hour || vM !== minute) return null;
   return adjusted;
