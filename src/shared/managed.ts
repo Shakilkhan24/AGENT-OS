@@ -231,7 +231,12 @@ export type Grant = z.infer<typeof grantSchema>;
 
 // ── ArtifactReference ────────────────────────────────────────────────────────
 
-export const artifactKindSchema = z.enum(["input", "context", "evidence", "output"]);
+// M7.6 — `ci` joins the existing four kinds for read-only CI
+// failure/log collection + release/deployment-plan artifacts. The
+// kind is gated through the same `grant.scope_json.artifactKinds`
+// authority check as the other four; no signing column is added
+// (the M7.6 spec rejects that as scope creep).
+export const artifactKindSchema = z.enum(["input", "context", "evidence", "output", "ci"]);
 export type ArtifactKind = z.infer<typeof artifactKindSchema>;
 
 export const artifactReferenceSchema = z.object({

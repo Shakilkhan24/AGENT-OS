@@ -54,7 +54,10 @@ export type HandoffTargetAccountMode = "anonymous" | "authenticated" | "trusted-
 export interface HandoffArtifact {
   readonly id: string;
   readonly sha256: string;
-  readonly kind: "input" | "context" | "evidence" | "output";
+  // M7.6 — `ci` joins the legacy four. The handoff gate mirrors
+  // the grant scope check: a CI artifact is only handed off when
+  // the receiving principal's grant lists `"ci"` in `artifactKinds`.
+  readonly kind: "input" | "context" | "evidence" | "output" | "ci";
   readonly uri: string;
   readonly mime: string;
   readonly bytes: number;
