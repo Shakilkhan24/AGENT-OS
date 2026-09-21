@@ -146,5 +146,21 @@ const api: API = {
     call("new-attempt", input),
   requestStop: (runId, input) =>
     call("request-stop", runId, input),
+  // M6.1 — single workflow executor. The runtime validates the
+  // graph, runs each step via its existing primitive seam
+  // (executeOnce / verifyOnce / pinArtifact / readReview / execFile),
+  // emits audit events, and returns the typed `WorkflowResult`.
+  // The renderer receives an `{kind: "ok"} | {kind: "conflict"}`
+  // envelope so a validation / dispatch failure surfaces as a
+  // human reason without forcing the renderer to parse `Failure`
+  // shape. Cast mirrors the `input` / `files` pattern: the
+  // protocol layer declares the response as `z.unknown()` and the
+  // dispatcher's `parseResult` enforces the strict result schema
+  // at the wire boundary.
+  runWorkflow: (input) =>
+    call("run-workflow", input) as Promise<
+      | { kind: "ok"; result: import("../shared/workflow-executor-schema").WorkflowResult }
+      | { kind: "conflict"; reason: string }
+    >,
 };
 contextBridge.exposeInMainWorld("minimal", api);

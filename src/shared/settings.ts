@@ -1,4 +1,12 @@
 import { z } from "zod";
+import {
+  workflowExecutorMaxFanoutSchema,
+  workflowExecutorDefaultStepTimeoutMsSchema,
+  workflowExecutorWaitPollMsSchema,
+  DEFAULT_MAX_FANOUT,
+  DEFAULT_STEP_TIMEOUT_MS,
+  DEFAULT_WAIT_POLL_MS,
+} from "./workflow-executor-schema";
 
 export const settingsSchema = z
   .object({
@@ -22,6 +30,9 @@ export const settingsSchema = z
     gracefulStopMs: z.number().int().min(100).max(10000).default(1000),
     fileWatching: z.boolean().default(false),
     shellMode: z.enum(["login", "clean"]).default("login"),
+    workflowExecutorMaxFanout: workflowExecutorMaxFanoutSchema.default(DEFAULT_MAX_FANOUT),
+    workflowExecutorDefaultStepTimeoutMs: workflowExecutorDefaultStepTimeoutMsSchema.default(DEFAULT_STEP_TIMEOUT_MS),
+    workflowExecutorWaitPollMs: workflowExecutorWaitPollMsSchema.default(DEFAULT_WAIT_POLL_MS),
   })
   .strict();
 export type Settings = z.infer<typeof settingsSchema>;
