@@ -35,6 +35,24 @@ import {
   updateSessionMetadataInputSchema, updateSessionMetadataResultSchema,
   viewSessionMemoryInputSchema, viewTaskMemoryInputSchema, viewTerminalMemoryInputSchema,
 } from "./workspace6-schema";
+import {
+  runWorkflowInputSchema,
+  workflowResultSchema,
+} from "./workflow-executor-schema";
+import {
+  upsertScheduleInputSchema,
+  upsertScheduleResultSchema,
+  publishScheduleRevisionInputSchema,
+  publishScheduleRevisionResultSchema,
+  promoteScheduleRevisionInputSchema,
+  promoteScheduleRevisionResultSchema,
+  setScheduleStatusInputSchema,
+  setScheduleStatusResultSchema,
+  listSchedulesInputSchema,
+  listSchedulesResultSchema,
+  previewScheduleFiringsInputSchema,
+  previewScheduleFiringsResultSchema,
+} from "./schedule-ipc-schema";
 
 export const API_VERSION = 1;
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024;
@@ -145,6 +163,31 @@ export const methods = {
   "hide-terminal": method(z.tuple([hideTerminalInputSchema]), hideTerminalResultSchema),
   "stop-and-remove-terminal": method(z.tuple([stopAndRemoveTerminalInputSchema]), stopAndRemoveTerminalResultSchema, MAX_DEADLINE_MS),
   "delete-terminal-history": method(z.tuple([deleteTerminalHistoryInputSchema]), deleteTerminalHistoryResultSchema, MAX_DEADLINE_MS),
+  // M6.1 — single workflow executor. `run-workflow` accepts a complete
+  // `WorkflowGraph` (Zod-strict, capped at 64 steps + 256 edges) plus
+  // an optional settings override; the runtime emits audit events
+  // (`workflow.started` / `workflow.step.*` / `workflow.completed`)
+  // and returns the typed `WorkflowResult`. The dispatcher handler
+  // also surfaces `AppError` rejections as a structured `{kind:
+  // "conflict", reason}` envelope so the renderer doesn't have to
+  // parse `Failure` shape — same pattern as the M3c.5 actions.
+  // `MAX_DEADLINE_MS` is mandatory: an `agent` step can run for the
+  // full 10-minute budget, and the graph can chain many of them.
+  "run-workflow": method(z.tuple([runWorkflowInputSchema]), z.unknown(), MAX_DEADLINE_MS),
+  // M7 — schedule management. Every handler runs the input through
+  // the dispatcher's Zod parse, so a malformed wire value fails the
+  // IPC boundary instead of leaking into the dispatcher. The
+  // response is `z.unknown()` because the dispatch envelope pattern
+  // (mirroring M6.1's `run-workflow`) returns either the typed
+  // result OR a structured `{kind: "conflict", reason}` — the
+  // runtime re-parses via `parseResult` below to enforce the
+  // strict typed surface.
+  "upsert-schedule": method(upsertScheduleInputSchema, z.unknown()),
+  "publish-schedule-revision": method(publishScheduleRevisionInputSchema, z.unknown()),
+  "promote-schedule-revision": method(promoteScheduleRevisionInputSchema, z.unknown()),
+  "set-schedule-status": method(setScheduleStatusInputSchema, z.unknown()),
+  "list-schedules": method(listSchedulesInputSchema, z.unknown()),
+  "preview-schedule-firings": method(previewScheduleFiringsInputSchema, z.unknown()),
 } as const;
 export type Method = keyof typeof methods;
 export type RequestArgs<M extends Method> = z.output<(typeof methods)[M]["request"]>;
@@ -211,8 +254,56 @@ export function parseResult<M extends Method>(method: M, args: InputArgs<M>, val
     const [, action] = methods.files.request.parse(args);
     resultSchemas[action.action].parse(result);
   }
+  if (method === "run-workflow") {
+    // The dispatcher handler validates the request as `runWorkflowInputSchema`
+    // and returns either a parsed `WorkflowResult` (re-validated against
+    // `workflowResultSchema` inside the handler) or a structured conflict
+    // envelope. Re-parse here so the renderer's typed surface is
+    // trustworthy: a malformed wire value fails the strict Zod schemas
+    // instead of silently passing through `z.unknown()`.
+    const envelope = runWorkflowEnvelopeSchema.parse(result);
+    if (envelope.kind === "ok") workflowResultSchema.parse(envelope.result);
+    return envelope as Result<M>;
+  }
+  if (method === "upsert-schedule" || method === "publish-schedule-revision"
+      || method === "promote-schedule-revision" || method === "set-schedule-status"
+      || method === "list-schedules" || method === "preview-schedule-firings") {
+    // The schedule IPC methods return either the typed result OR a
+    // structured `{kind: "conflict", reason}` envelope (mirrors
+    // `run-workflow` above). Re-parse so a malformed wire value
+    // fails the strict Zod schemas.
+    const envelope = scheduleEnvelopeSchema.parse(result);
+    if (envelope.kind === "ok") {
+      if (method === "upsert-schedule") upsertScheduleResultSchema.parse(envelope.result);
+      else if (method === "publish-schedule-revision") publishScheduleRevisionResultSchema.parse(envelope.result);
+      else if (method === "promote-schedule-revision") promoteScheduleRevisionResultSchema.parse(envelope.result);
+      else if (method === "set-schedule-status") setScheduleStatusResultSchema.parse(envelope.result);
+      else if (method === "list-schedules") listSchedulesResultSchema.parse(envelope.result);
+      else if (method === "preview-schedule-firings") previewScheduleFiringsResultSchema.parse(envelope.result);
+    }
+    return envelope as Result<M>;
+  }
   return result as Result<M>;
 }
+
+const runWorkflowEnvelopeSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("ok"),
+    result: workflowResultSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal("conflict"),
+    reason: z.string().min(1).max(4096),
+  }).strict(),
+]);
+
+// M7 — schedule IPC envelope. The runtime returns either the typed
+// result OR a structured conflict (same pattern as `run-workflow`).
+// `parseResult` re-parses here to enforce the strict typed surface.
+const scheduleEnvelopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("ok"), result: z.unknown() }).strict(),
+  z.object({ kind: z.literal("conflict"), reason: z.string().min(1).max(4096) }).strict(),
+]);
 export function unwrap<M extends Method>(request: Request, args: InputArgs<M>, value: unknown): Result<M> {
   checkFrame(value);
   const response = responseSchema.parse(value);

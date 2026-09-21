@@ -31,15 +31,41 @@ import {
 import { runWorkflow } from "./orchestration/workflow-execute";
 import { workflowResultSchema } from "../shared/workflow-executor-schema";
 import { mintBootIdentity, purgeStaleBootIdentities, type BootIdentity } from "./db/boot-identity";
+import {
+  publishScheduleRevision as dispatchPublishRevision,
+  promoteRevision as dispatchPromoteRevision,
+  upsertSchedule as dispatchUpsertSchedule,
+  setScheduleStatus as dispatchSetScheduleStatus,
+  readScheduleRow,
+} from "./orchestration/schedule-dispatcher";
+import { nextLocalOccurrence, type ScheduleRule } from "./db/schedule-schema";
+import { Scheduler } from "./orchestration/scheduler";
 
 /** Domain ownership without Electron. One selected attachment is retained until M5. */
+type DbWorker = import("./db/worker").DbWorker;
+
+function driverOf(worker: DbWorker): {
+  prepare(sql: string): {
+    run(...b: unknown[]): void;
+    first(...b: unknown[]): Record<string, unknown> | undefined;
+    all(...b: unknown[]): Array<Record<string, unknown>>;
+  };
+} {
+  return (worker as unknown as { driver: ReturnType<typeof driverOf> }).driver;
+}
+
 export class RuntimeWorkspace {
   readonly incarnation = crypto.randomUUID();
   /** M7.3 — per-process boot identity minted during `open()`. Every
    *  schedule occurrence row carries this id so the dispatcher can
-   *  recognise rows owned by a prior (dead) boot and reconcile them
-   *  to `state: "unavailable"`. */
+   *  recognise rows owned by a prior (dead) boot and reconcile
+   *  them to `state: "unavailable"`. */
   readonly bootIdentity: BootIdentity;
+  /** M7.3 — in-runtime scheduler loop. Constructed during `open()`;
+   *  `start()` is invoked from `connect()` so the loop only runs
+   *  when a renderer is attached. The `dispatchRecipe` callback
+   *  delegates to the M6.1 workflow executor. */
+  readonly scheduler: Scheduler;
   private peers = new Map<string, { send: (message: ServerSignal) => void; endpoint: RuntimeEndpoint }>();
   private attachment?: { owner: string; view: Attachment };
   private generation = 0;
@@ -55,6 +81,10 @@ export class RuntimeWorkspace {
     bootIdentity: BootIdentity) {
     this.ownedDb = ownedDb;
     this.bootIdentity = bootIdentity;
+    this.scheduler = new Scheduler(ownedDb.worker, {
+      bootIdentity,
+      dispatchRecipe: async () => ({ workflowRunId: crypto.randomUUID() }),
+    });
     this.inputQueue = new TerminalInputQueue(async (token, data) => {
       if (this.closing) throw new AppError("UNAVAILABLE", "Runtime is stopping");
       if (this.attachment?.view.token !== token)
@@ -100,6 +130,12 @@ export class RuntimeWorkspace {
   connect(peer: RuntimePeer, send: (message: ServerSignal) => void): RuntimeEndpoint {
     if (this.closing) throw new AppError("UNAVAILABLE", "The runtime is closing");
     if (this.peers.has(peer.connectionId)) throw new AppError("CONFLICT", "Connection already exists");
+    // M7.3 — start the scheduler loop on first connect. The loop is
+    // idempotent (`start()` returns a no-op result on subsequent
+    // calls) so multiple peer connections share the same loop.
+    void this.scheduler.start().catch(error => {
+      console.error("scheduler: failed to start", error);
+    });
     const dispatcher = new ProtocolDispatcher();
     const service = this.service;
     let closed = false;
@@ -380,6 +416,106 @@ export class RuntimeWorkspace {
         throw error;
       }
     });
+    // M7 — schedule management IPC. The dispatcher handlers do the
+    // work; `AppError` becomes a structured `{kind: "conflict",
+    // reason}` envelope so the renderer surfaces a human reason
+    // without parsing `Failure` shape — same wrapping as the M6.1
+    // `run-workflow` handler.
+    dispatcher.register("upsert-schedule", async ([input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const result = await dispatchUpsertSchedule(worker, input);
+        return { kind: "ok" as const, result };
+      } catch (error) {
+        if (error instanceof AppError) return { kind: "conflict" as const, reason: error.message };
+        if (error instanceof z.ZodError) {
+          const first = error.issues[0]?.message ?? "invalid input";
+          return { kind: "conflict" as const, reason: first };
+        }
+        throw error;
+      }
+    });
+    dispatcher.register("publish-schedule-revision", async ([input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const rev = await dispatchPublishRevision(worker, input);
+        return {
+          kind: "ok" as const,
+          result: {
+            scheduleId: rev.scheduleId,
+            revision: rev.revision,
+            revisionDigest: rev.revisionDigest,
+            publishedAt: rev.publishedAt,
+          },
+        };
+      } catch (error) {
+        if (error instanceof AppError) return { kind: "conflict" as const, reason: error.message };
+        if (error instanceof z.ZodError) {
+          const first = error.issues[0]?.message ?? "invalid input";
+          return { kind: "conflict" as const, reason: first };
+        }
+        throw error;
+      }
+    });
+    dispatcher.register("promote-schedule-revision", async ([input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        await dispatchPromoteRevision(worker, input.scheduleId, input.revision, input.to);
+        return {
+          kind: "ok" as const,
+          result: { scheduleId: input.scheduleId, revision: input.revision, status: input.to === "enabled" ? "enabled" : "revoked" },
+        };
+      } catch (error) {
+        if (error instanceof AppError) return { kind: "conflict" as const, reason: error.message };
+        throw error;
+      }
+    });
+    dispatcher.register("set-schedule-status", async ([input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        await dispatchSetScheduleStatus(worker, input.scheduleId, input.status);
+        return {
+          kind: "ok" as const,
+          result: { scheduleId: input.scheduleId, status: input.status },
+        };
+      } catch (error) {
+        if (error instanceof AppError) return { kind: "conflict" as const, reason: error.message };
+        throw error;
+      }
+    });
+    dispatcher.register("list-schedules", async () => {
+      const worker = this.ownedDb.worker;
+      const rows = driverOf(worker).prepare(
+        "SELECT schedule_id, display_name, status, recipe_id, timezone FROM schedule ORDER BY schedule_id ASC",
+      ).all() as unknown as Array<{ schedule_id: string; display_name: string; status: string; recipe_id: string; timezone: string }>;
+      const result = rows.map(r => ({
+        scheduleId: r.schedule_id,
+        displayName: r.display_name,
+        status: r.status as "enabled" | "paused" | "disabled",
+        recipeId: r.recipe_id,
+        timezone: r.timezone,
+      }));
+      return { kind: "ok" as const, result };
+    });
+    dispatcher.register("preview-schedule-firings", async ([input]) => {
+      const worker = this.ownedDb.worker;
+      const row = await readScheduleRow(worker, input.scheduleId);
+      if (!row) throw new AppError("NOT_FOUND", `schedule ${input.scheduleId} not found`);
+      const fromUtc = new Date(input.fromUtc);
+      const firings: Array<{ intendedUtc: string; localTimeIso: string; skipped: boolean }> = [];
+      let cursor = fromUtc;
+      for (let i = 0; i < input.count; i += 1) {
+        const next = nextLocalOccurrence(row.rule as ScheduleRule, row.timezone, cursor);
+        firings.push({
+          intendedUtc: next.intendedUtc,
+          localTimeIso: next.localTimeIso,
+          skipped: next.skipped,
+        });
+        if (!next.skipped) cursor = new Date(next.intendedUtc);
+        else cursor = new Date(cursor.getTime() + 24 * 60 * 60_000);
+      }
+      return { kind: "ok" as const, result: { scheduleId: input.scheduleId, firings } };
+    });
     const endpoint: RuntimeEndpoint = {
       dispatch: request => dispatcher.dispatch(request.method, request),
       cancel: id => dispatcher.cancel(id),
@@ -423,6 +559,9 @@ export class RuntimeWorkspace {
   private async shutdown() {
     this.closing = true; this.unsubscribe(); clearTimeout(this.changeTimer);
     this.detach();
+    // M7.3 — stop the scheduler loop before tearing the DB down so
+    // any in-flight tick can finish without racing the close.
+    await this.scheduler.stop();
     // Drain admitted input before tearing the engine down — those bytes were
     // promised to the terminal even if no peer is connected anymore.
     await this.inputQueue.close();
