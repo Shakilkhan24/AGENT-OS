@@ -227,7 +227,8 @@ function wireChild(
     if (!exited) exit(null, null);
     lifecycle.emit("error", new AppError("UNAVAILABLE", `Framed runner child error: ${error.message}`));
   });
-  child.on("exit", (code, signal) => {
+  // `exit` can precede the last stdout data. Wait until stdio is drained.
+  child.on("close", (code, signal) => {
     if (!exited) exit(code, signal);
     handleClose();
   });
@@ -272,11 +273,7 @@ function wireChild(
         if (closed) return;
         closed = true;
         try { child.stdin.end(); } catch { /* already closed */ }
-        // Defer the exit so a final exit frame from the child can land.
-        const exitTimer = setTimeout(() => {
-          if (!exited) exit(0, null);
-        }, 1_000);
-        exitTimer.unref();
+        // EOF requests completion; only provider/OS observations report an exit.
       },
     },
     acknowledge: (bytes: number) => {

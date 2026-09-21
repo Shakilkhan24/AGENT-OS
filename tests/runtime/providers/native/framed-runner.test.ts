@@ -48,13 +48,34 @@ test("framed runner spawns the stub and bridges started/output/exit", async () =
   const handle = await spawnFramedRunner(stubPath, baseRequest, { command: stubCommand });
   const events = await collect(handle);
   assert.ok(handle.startup);
+  const exited = waitForExit(handle);
   handle.stdin.close();
-  // Give the child time to emit exit frames.
-  await new Promise(resolve => setTimeout(resolve, 500));
-  await new Promise(resolve => setImmediate(resolve));
+  await exited;
   const eventKinds = events.map(e => e.kind);
   assert.ok(eventKinds.includes("started"));
   assert.ok(eventKinds.includes("exit"));
+});
+
+function waitForExit(handle: { lifecycle: import("node:events").EventEmitter }): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { cleanup(); reject(new Error("Provider did not exit in 5 seconds")); }, 5000);
+    const listener = (event: Record<string, unknown>) => {
+      if (event.kind === "exit") { cleanup(); resolve(event); }
+    };
+    const failure = (error: Error) => { cleanup(); reject(error); };
+    const cleanup = () => { clearTimeout(timer); handle.lifecycle.off("event", listener); handle.lifecycle.off("error", failure); };
+    handle.lifecycle.on("event", listener); handle.lifecycle.once("error", failure);
+  });
+}
+
+test("closing provider stdin never fabricates a successful process exit", { timeout: 10000 }, async () => {
+  const handle = await spawnFramedRunner("fixture", baseRequest, { command: {
+    binary: process.execPath,
+    args: ["-e", "process.stdin.resume(); process.stdin.on('end', () => setTimeout(() => process.exit(7), 1300));"],
+  } });
+  const exited = waitForExit(handle);
+  handle.stdin.close();
+  assert.equal((await exited).code, 7);
 });
 
 test("the byte-budgeted stdin refuses past-cap writes", async () => {
