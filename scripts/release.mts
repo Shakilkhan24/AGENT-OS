@@ -145,6 +145,10 @@ async function collectLines(
       continue;
     }
     if (!entry.isFile()) continue;
+    // The release tooling holds a flock on `.package.lock`; the
+    // manifest must not pin transient lock files. The manifest also
+    // excludes itself so re-running the writer is idempotent.
+    if (entry.name === ".package.lock") continue;
     if (entry.name === "MANIFEST.sha256") continue;
     const rel = path.relative(rootDir, abs);
     const digest = await sha256OfFile(abs);
