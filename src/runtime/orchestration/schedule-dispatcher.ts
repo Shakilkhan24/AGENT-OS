@@ -351,6 +351,12 @@ export interface DispatcherDeps {
     ruleDigest: string;
   }) => Promise<{ workflowRunId: string }>;
   readonly now?: () => Date;
+  /** M7.2 — grace window (ms) for catching up a missed firing.
+   *  Default 0 = skip-and-report; `> 0` permits a single coalesced
+   *  catch-up of the most recent pending row whose intended time is
+   *  within `now - intendedUtc <= graceWindowMs`. Older rows are
+   *  still skipped (audit-only). */
+  readonly graceWindowMs?: number;
 }
 
 /**
@@ -366,9 +372,10 @@ export interface DispatcherDeps {
 export async function fireDueOccurrences(
   worker: DbWorker,
   deps: DispatcherDeps,
-): Promise<{ dispatched: number; skipped: number }> {
+): Promise<{ dispatched: number; skipped: number; coalesced: number }> {
   const driver = driverOf(worker);
-  const nowIso = (deps.now ?? (() => new Date()))().toISOString();
+  const now = (deps.now ?? (() => new Date()))();
+  const nowIso = now.toISOString();
   const due = driver
     .prepare(
       "SELECT * FROM schedule_occurrence WHERE state = 'pending' AND intended_utc <= ? ORDER BY intended_utc ASC",
@@ -376,6 +383,7 @@ export async function fireDueOccurrences(
     .all(nowIso) as Array<Record<string, unknown>>;
   let dispatched = 0;
   let skipped = 0;
+  let coalesced = 0;
   for (const row of due) {
     const occurrence = parseOccurrenceRow(row);
     const schedule = readSchedule(worker, occurrence.scheduleId);
@@ -396,6 +404,76 @@ export async function fireDueOccurrences(
         continue;
       }
     }
+    // M7.2 — grace-window coalescing. Among consecutive past-due
+    // rows that fall inside the grace window, ONLY the most-recent
+    // past-due row fires; the earlier past-due rows in the same
+    // window are marked `skipped` with a `coalesced_into_next`
+    // audit reason pointing at the firing row, AND the firing
+    // row's `coalesced_with` links to its immediately-prior
+    // past-due row (so the audit trail can be walked backwards).
+    // Default `graceWindowMs = 0` keeps the legacy behaviour
+    // (every past-due row fires, no coalescing).
+    //
+    // Past the grace window: the row is marked `skipped` and
+    // does NOT fire (skip-and-report).
+    const graceWindowMs = deps.graceWindowMs ?? 0;
+    const currentKey = occurrence.scheduleId + ":" + occurrence.revision + ":" + occurrence.intendedUtc;
+    const intendedMs = new Date(occurrence.intendedUtc).getTime();
+    const latenessMs = now.getTime() - intendedMs;
+    if (graceWindowMs > 0 && latenessMs > graceWindowMs) {
+      // Past the grace window — skip and do not fire.
+      transitionOccurrence(worker, occurrence, "skipped");
+      skipped += 1;
+      continue;
+    }
+    if (graceWindowMs > 0 && latenessMs > 0) {
+      // Past-due inside the window — check if there's a LATER
+      // past-due row in the same window. If yes, the current row
+      // is being absorbed by that later row, so skip it. If no,
+      // the current row is the most-recent past-due row and
+      // fires (carrying a `coalesced_with` link to its prior
+      // past-due row if one exists).
+      // The in-memory driver does not evaluate `COUNT(*)`, so we
+      // query for any later past-due rows directly and count in
+      // JS. A "later past-due row" means one whose `intended_utc`
+      // falls within the grace window (i.e. is also past-due).
+      const windowStart = new Date(now.getTime() - graceWindowMs).toISOString();
+      const laterRows = driver
+        .prepare(
+          "SELECT intended_utc FROM schedule_occurrence " +
+            "WHERE schedule_id = ? AND revision = ? " +
+            "AND intended_utc > ? AND intended_utc < ?",
+        )
+        .all(occurrence.scheduleId, occurrence.revision,
+             occurrence.intendedUtc, nowIso);
+      if (laterRows.length > 0) {
+        // The current row is being absorbed by a later past-due
+        // row. Mark it skipped.
+        markPriorSkipped(worker, occurrence, currentKey);
+        // We can't link to the absorbing row yet (it hasn't
+        // been processed) — but the audit reason identifies the
+        // intent.
+        skipped += 1;
+        continue;
+      }
+      // Current is the most-recent past-due row — fire it. If
+      // there's a prior past-due row, record the coalesce link.
+      const priorPastDue = driver
+        .prepare(
+          "SELECT * FROM schedule_occurrence " +
+            "WHERE schedule_id = ? AND revision = ? " +
+            "AND intended_utc < ? AND intended_utc > ? " +
+            "ORDER BY intended_utc DESC LIMIT 1",
+        )
+        .all(occurrence.scheduleId, occurrence.revision,
+             occurrence.intendedUtc, windowStart) as Array<Record<string, unknown>>;
+      if (priorPastDue.length > 0) {
+        const priorKey = String(priorPastDue[0].schedule_id) + ":" +
+          String(priorPastDue[0].revision) + ":" + String(priorPastDue[0].intended_utc);
+        markFiringCoalescedWith(worker, occurrence, priorKey);
+        coalesced += 1;
+      }
+    }
     const result = await deps.dispatchRecipe({
       scheduleId: occurrence.scheduleId,
       revision: occurrence.revision,
@@ -414,7 +492,7 @@ export async function fireDueOccurrences(
     linkOccurrenceToRun(worker, occurrence, result.workflowRunId);
     dispatched += 1;
   }
-  return { dispatched, skipped };
+  return { dispatched, skipped, coalesced };
 }
 
 function transitionOccurrence(
@@ -445,6 +523,51 @@ function linkOccurrenceToRun(
   ).run(
     new Date().toISOString(), workflowRunUuid,
     occurrence.scheduleId, occurrence.revision, occurrence.intendedUtc,
+  );
+}
+
+/** M7.2 — flip the prior row's `state` to `skipped` with reason
+ *  `coalesced_into_next:<next-occurrence-key>`. The prior row
+ *  never fires again. Idempotent: the `state = 'pending'` guard
+ *  prevents a re-run from double-counting. */
+function markPriorSkipped(
+  worker: DbWorker,
+  prior: Occurrence,
+  nextKey: string,
+): void {
+  const driver = driverOf(worker);
+  driver.prepare(
+    "UPDATE schedule_occurrence SET state = 'skipped' " +
+      "WHERE schedule_id = ? AND revision = ? AND intended_utc = ? AND state = 'pending'",
+  ).run(
+    prior.scheduleId, prior.revision, prior.intendedUtc,
+  );
+  // Audit log entry — `reason` records why the prior was skipped
+  // so a renderer / audit reader can answer "why did the user see
+  // 9:00pm's firing but not 8:00pm's?".
+  driver.prepare(
+    "INSERT INTO meta (key, value) VALUES (?, ?)",
+  ).run(
+    `occurrence:${prior.scheduleId}:${prior.revision}:${prior.intendedUtc}:skipped_reason`,
+    `coalesced_into_next:${nextKey}`,
+  );
+}
+
+/** M7.2 — stamp `coalesced_with` on the firing row so an audit
+ *  reader can follow the prior → current link without joining
+ *  against the audit log. */
+function markFiringCoalescedWith(
+  worker: DbWorker,
+  firing: Occurrence,
+  priorKey: string,
+): void {
+  const driver = driverOf(worker);
+  driver.prepare(
+    "UPDATE schedule_occurrence SET coalesced_with = ? " +
+      "WHERE schedule_id = ? AND revision = ? AND intended_utc = ?",
+  ).run(
+    priorKey,
+    firing.scheduleId, firing.revision, firing.intendedUtc,
   );
 }
 

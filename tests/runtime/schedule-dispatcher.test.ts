@@ -333,6 +333,123 @@ test("M7 nextLocalOccurrence returns a valid future occurrence outside DST gap",
   assert.ok(new Date(result.intendedUtc).getTime() > from.getTime());
 });
 
+test("M7.2 grace-window coalescing: multiple past-due rows fire latest + coalesce prior", async () => {
+  const worker = freshWorker();
+  try {
+    await upsertSchedule(worker, {
+      scheduleId: "s1", displayName: "Daily",
+      rule: { kind: "daily", hour: 9, minute: 0 },
+      timezone: "UTC", recipeId: "r1",
+    });
+    const rev = await publishScheduleRevision(worker, {
+      scheduleId: "s1",
+      rule: { kind: "daily", hour: 9, minute: 0 },
+      timezone: "UTC", recipeId: "r1",
+      publishedBy: "tester",
+    });
+    await promoteRevision(worker, "s1", rev.revision, "enabled");
+    // Seed 3 occurrences; all are past-due at fire time but within the
+    // grace window.
+    await seedNextOccurrences(worker, "s1", 3, { now: () => new Date("2026-01-01T00:00:00Z") });
+
+    const driver = (worker as unknown as { driver: { prepare: (s: string) => { all: (...b: unknown[]) => Array<Record<string, unknown>> } } }).driver;
+    let dispatchedCount = 0;
+    const result = await fireDueOccurrences(worker, {
+      dispatchRecipe: async () => {
+        dispatchedCount += 1;
+        return { workflowRunId: "00000000-0000-4000-8000-000000000001" };
+      },
+      now: () => new Date("2026-01-03T09:00:00Z"),
+      graceWindowMs: 7 * 24 * 60 * 60_000, // 1 week
+    });
+
+    // The two earlier rows are coalesced into the latest two firings.
+    // Each past-due row fires and carries a `coalesced_with` link
+    // to its immediately-prior past-due row.
+    assert.equal(result.dispatched, 2, `expected 2 firings (1st + 2nd past-due rows), got ${result.dispatched}`);
+    assert.equal(dispatchedCount, 2);
+    assert.equal(result.coalesced, 1, `expected 1 coalescing event (oldest into second-oldest), got ${result.coalesced}`);
+
+    // Row order: rows[0] (oldest) was the coalesced prior → skipped.
+    // rows[1] is past-due → fires with coalesced_with = rows[0].intended.
+    // rows[2] is on-time → fires (no coalesced_with).
+    const rows = driver.prepare(
+      "SELECT intended_utc, state, coalesced_with FROM schedule_occurrence " +
+        "WHERE schedule_id = ? AND revision = ? ORDER BY intended_utc ASC",
+    ).all("s1", rev.revision);
+    assert.equal(rows.length, 3);
+    assert.equal(rows[0].state, "skipped", "oldest marked skipped");
+    assert.equal(rows[1].state, "dispatched");
+    assert.equal(rows[1].coalesced_with, `s1:${rev.revision}:${rows[0].intended_utc}`);
+    assert.equal(rows[2].state, "dispatched");
+    assert.equal(rows[2].coalesced_with, null);
+  } finally { await worker.close(); }
+});
+
+test("M7.2 grace-window: row past the window → skipped, not fired", async () => {
+  const worker = freshWorker();
+  try {
+    await upsertSchedule(worker, {
+      scheduleId: "s1", displayName: "Daily",
+      rule: { kind: "daily", hour: 9, minute: 0 },
+      timezone: "UTC", recipeId: "r1",
+    });
+    const rev = await publishScheduleRevision(worker, {
+      scheduleId: "s1",
+      rule: { kind: "daily", hour: 9, minute: 0 },
+      timezone: "UTC", recipeId: "r1",
+      publishedBy: "tester",
+    });
+    await promoteRevision(worker, "s1", rev.revision, "enabled");
+    await seedNextOccurrences(worker, "s1", 1, { now: () => new Date("2026-01-01T00:00:00Z") });
+
+    let dispatchedCount = 0;
+    const result = await fireDueOccurrences(worker, {
+      dispatchRecipe: async () => {
+        dispatchedCount += 1;
+        return { workflowRunId: "00000000-0000-4000-8000-000000000001" };
+      },
+      now: () => new Date("2026-02-01T09:00:00Z"), // 1 month past due
+      graceWindowMs: 60 * 60_000, // 1 hour
+    });
+    assert.equal(result.dispatched, 0);
+    assert.equal(result.skipped, 1);
+    assert.equal(result.coalesced, 0);
+    assert.equal(dispatchedCount, 0);
+  } finally { await worker.close(); }
+});
+
+test("M7.2 default graceWindowMs=0: no coalescing, every past-due row fires", async () => {
+  const worker = freshWorker();
+  try {
+    await upsertSchedule(worker, {
+      scheduleId: "s1", displayName: "Daily",
+      rule: { kind: "daily", hour: 9, minute: 0 },
+      timezone: "UTC", recipeId: "r1",
+    });
+    const rev = await publishScheduleRevision(worker, {
+      scheduleId: "s1",
+      rule: { kind: "daily", hour: 9, minute: 0 },
+      timezone: "UTC", recipeId: "r1",
+      publishedBy: "tester",
+    });
+    await promoteRevision(worker, "s1", rev.revision, "enabled");
+    await seedNextOccurrences(worker, "s1", 3, { now: () => new Date("2026-01-01T00:00:00Z") });
+    let dispatchedCount = 0;
+    const result = await fireDueOccurrences(worker, {
+      dispatchRecipe: async () => {
+        dispatchedCount += 1;
+        return { workflowRunId: "00000000-0000-4000-8000-000000000001" };
+      },
+      now: () => new Date("2026-01-05T00:00:00Z"),
+      // no graceWindowMs → default 0 → no coalescing
+    });
+    assert.equal(result.dispatched, 3, `expected all 3 past-due rows to fire, got ${result.dispatched}`);
+    assert.equal(result.coalesced, 0);
+    assert.equal(dispatchedCount, 3);
+  } finally { await worker.close(); }
+});
+
 test("M7 seedNextOccurrences refuses out-of-range count", async () => {
   const worker = freshWorker();
   try {
