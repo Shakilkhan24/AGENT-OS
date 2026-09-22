@@ -1,6 +1,6 @@
 {
   "name": "minimal",
-  "version": "1.2.9",
+  "version": "1.2.10",
   "main": "dist/main/index.cjs",
   "scripts": {
     "build": "node scripts/build.mjs && vite build",

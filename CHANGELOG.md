@@ -2,6 +2,106 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.10] - 2026-09-22
+
+M6.4 live durable-runner poll. Closes the first follow-up listed in
+[`docs/release-notes-1.2.9.md`](../docs/release-notes-1.2.9.md)
+(line 203: "Live durable-runner poll. A spinner / poll that
+observes `workflow_run.status` transitions and updates the result
+region in place"). The supported prefix of user-facing features
+is unchanged from 1.2.9; this cut ships a UX improvement to the
+already-shipped advanced-gated durable execution surface.
+
+### Highlights
+
+- **`get-workflow-run` IPC method.**
+  [`src/shared/protocol.ts`](../src/shared/protocol.ts) registers
+  a new read-side method with a 5 s timeout (matches
+  `view-session-memory`). The runtime handler in
+  [`src/runtime/workspace.ts`](../src/runtime/workspace.ts)
+  delegates to the new
+  [`loadWorkflowRunSnapshot()`](../src/runtime/db/workflow-runs.ts)
+  helper and returns a typed `WorkflowRunSnapshot` discriminated
+  on `kind` ("absent" | "present"). No envelope — this is a
+  read, so failures surface as real IPC `failure`s (matches
+  `get-settings` / `view-session-memory`).
+- **`workflowRunSnapshotSchema` in shared.**
+  [`src/shared/workflow-executor-schema.ts`](../src/shared/workflow-executor-schema.ts)
+  exports the discriminated snapshot shape plus the
+  `workflowRunRowWireSchema` / `workflowStepOutputRowWireSchema` /
+  `workflowStepStateRowWireSchema` row schemas. Re-declared in
+  the shared layer so the renderer can import the typed surface
+  without crossing the runtime boundary; drift is caught by the
+  IPC re-parse in `protocol.ts:parseResult`.
+- **Polling renderer.**
+  [`src/renderer/WorkflowRunner.tsx`](../src/renderer/WorkflowRunner.tsx)
+  adds a `useEffect`-driven `setInterval` keyed on a
+  `pollWorkflowId` state. The interval starts after a successful
+  **Run durable** and stops when the polled run finalizes
+  (`run.status !== "running"`). The cadence is
+  `Math.max(250, DEFAULT_SETTINGS.waitPollMs)` ms so the
+  renderer reads at most four times a second.
+- **Progress strip.**
+  [`src/renderer/WorkflowRunner.tsx`](../src/renderer/WorkflowRunner.tsx)
+  renders a `<WorkflowProgressView>` above the existing result
+  table with one row per dispatched step + a coloured dot per
+  lifecycle state (`running | waiting | completed | failed |
+  cancelled`). Styles live in
+  [`src/renderer/style.css`](../src/renderer/style.css).
+
+### File surface
+
+- `src/runtime/db/workflow-runs.ts` — `loadWorkflowRunSnapshot`
+  helper.
+- `src/shared/workflow-executor-schema.ts` —
+  `workflowRunSnapshotSchema`, `getWorkflowRunInputSchema`,
+  plus the three wire row schemas.
+- `src/shared/protocol.ts` — `get-workflow-run` method +
+  `parseResult` branch.
+- `src/runtime/workspace.ts` — `dispatcher.register("get-workflow-run")`.
+- `src/preload/index.ts` — `getWorkflowRun` on `window.minimal`.
+- `src/shared/types.ts` — `API.getWorkflowRun(input)` typed.
+- `src/renderer/WorkflowRunner.tsx` — polling `useEffect` +
+  progress strip view + advanced-gated durable poll.
+- `src/renderer/style.css` — `.workflow-progress` strip styles
+  + per-state dot colours.
+- `tests/runtime/workflow-ipc.test.ts` — 4 new IPC tests
+  (timeout, absent, present, parseRequest rejects empty).
+- `tests/desktop/workflow-runner.spec.ts` — 1 new headless DOM
+  test (progress strip renders after a durable run on the
+  `command-only` fixture).
+- `docs/release-notes-1.2.10.md` — this release.
+
+### M9.6 preserved
+
+- Five boundary docs (`distribution`, `security`,
+  `provider-economics`, `commercial-decision`,
+  `cancel-and-walk-away`) are unchanged.
+- 14/14 M9.6 doc-freshness tests still pass.
+
+### M9.5 preserved
+
+- Pilot harness + refuse-to-spend gate is unchanged.
+- Williams 3×6 counterbalance + 20-fixture skeleton bank is
+  unchanged.
+- `pilotReport.caveats[]` literal honest-limit lines are unchanged.
+
+### M9.4 preserved
+
+- `settings.telemetry: false` default is unchanged.
+- `connect-src 'none'` CSP audit still passes.
+- `classifySourceForRetention()` retention floor still holds.
+- `diagnostics:export` canary pipeline still catches planted
+  tokens.
+
+### M9.3 preserved
+
+- `localStorage("minimal.advanced")` gate is unchanged.
+- Advanced controls gate hides managed-mode toggle + cheatsheet
+  palette actions by default.
+- Terminal host `role="log"` / `aria-live="polite"` /
+  `aria-label` contract is unchanged.
+
 ## [1.2.9] - 2026-09-22
 
 M6.1 workflow-executor renderer wiring. Closes the renderer-side half
