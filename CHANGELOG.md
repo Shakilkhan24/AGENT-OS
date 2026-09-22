@@ -2,6 +2,81 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.7] - 2026-09-22
+
+M9.6 boundary-pinning docs. Closes M9.6 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+This is a docs-only release; the supported prefix of user-facing
+features is unchanged from 1.2.6. The M9.6 bullet's "if
+commercialization is selected" clause evaluates to false at the
+time of recording; this cut pins the current boundaries in writing
+rather than adding new commercial surfaces.
+
+### Highlights
+
+- **Distribution inventory.**
+  [`docs/distribution.md`](../docs/distribution.md) — the shipped-
+  tree inventory, license matrix, update-mechanism statement
+  (Linux-only per `scripts/package.mjs:8-9`, unsigned release per
+  `scripts/verify-release.mts:11-13`), and counsel-gate reminder
+  (research doc 12 lines 70-78, quoted verbatim).
+- **Auth-rights statement.**
+  [`docs/security.md`](../docs/security.md) — the principal model
+  is local-only; the anti-self-approval rule cascades through three
+  call sites; the failure-code table enumerates the seven
+  authorization-bearing codes; the "what MINIMAL does NOT do"
+  section makes the absence of remote users, multi-tenant
+  boundaries, license-key validation, and remote-revocation paths
+  explicit.
+- **Provider-economics commitment.**
+  [`docs/provider-economics.md`](../docs/provider-economics.md) —
+  MINIMAL never holds, charges, or transfers provider spend
+  (mirrors research doc 12 line 51). The three audit surfaces
+  (pricing-catalog, observation, budget-gate) are display / audit /
+  enforcement only — never billing. The M9.5 refuse-to-spend gate
+  trips `AppError("BUDGET_EXCEEDED")`; it does not move money.
+- **Commercial-decision record.**
+  [`docs/commercial-decision.md`](../docs/commercial-decision.md) —
+  the explicit no-commercialization record at charter version
+  `1.0.0`. §3 lists the reversal criteria (cohort go/no-go rule met
+  for at least one of the three research-doc experiments + counsel
+  review of the four research-doc gates + a separate milestone
+  that delivers the corresponding primitives). §4 records the
+  explicit absence of a support-cost model in code.
+- **Cancel-and-walk-away runbook.**
+  [`docs/runbooks/cancel-and-walk-away.md`](../docs/runbooks/cancel-and-walk-away.md) —
+  the operator's portability drill. Walks the four phases (backup,
+  verify, diagnostics, restore) end-to-end on a clean supported
+  machine. §6 ("what does NOT transfer") restates research doc 12
+  line 82 verbatim.
+
+### File surface
+
+- `docs/distribution.md` — shipped-tree inventory + update-mechanism statement.
+- `docs/security.md` — local-only principal model + anti-self-approval + failure-code table.
+- `docs/provider-economics.md` — separation commitment + audit surfaces + portability.
+- `docs/commercial-decision.md` — explicit no-commercialization record at charter version `1.0.0`.
+- `docs/runbooks/cancel-and-walk-away.md` — operator's portability drill.
+- `docs/release-notes-1.2.7.md` — release notes for this cut.
+- `tests/release/distribution-inventory.test.ts` — distribution doc freshness guard.
+- `tests/docs/security-statement.test.ts` — security doc freshness guard.
+- `tests/docs/provider-economics.test.ts` — provider-economics doc freshness guard.
+- `tests/docs/commercial-decision.test.ts` — commercial-decision doc freshness guard.
+- `tests/release/cancel-walkaway.test.ts` — cancel-and-walk-away runbook freshness guard.
+
+### M9.5 preserved
+
+- Pilot harness + refuse-to-spend gate (`src/runtime/pilot/`) is unchanged.
+- Williams 3×6 counterbalance + 20-fixture skeleton bank is unchanged.
+- `pilotReport.caveats[]` literal honest-limit lines are unchanged.
+
+### M9.4 preserved
+
+- `settings.telemetry: false` default is unchanged.
+- `connect-src 'none'` CSP audit still passes.
+- `classifySourceForRetention()` retention floor still holds.
+- `diagnostics:export` canary pipeline still catches planted tokens.
+
 ## [1.2.6] - 2026-09-22
 
 M9.5 pilot harness + refuse-to-spend path. Closes M9.5 in
