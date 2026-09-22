@@ -19,6 +19,8 @@
     "probe:providers": "tsx scripts/provider-probe.mts",
     "bench": "tsx scripts/bench.mts",
     "diagnostics:export": "tsx scripts/diagnostics-export.mts",
+    "pilot:run": "tsx scripts/run-pilot.mts",
+    "pilot:synthetic": "tsx scripts/run-pilot.mts --synthetic --fixtures-dir tests/fixtures/pilot --out pilot-out",
     "hooks:install": "node scripts/install-hooks.mjs",
     "hooks:uninstall": "node scripts/install-hooks.mjs --uninstall"
   },
