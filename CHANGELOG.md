@@ -2,6 +2,116 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.9] - 2026-09-22
+
+M6.1 workflow-executor renderer wiring. Closes the renderer-side half
+of the M6.1 bullet in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+The non-renderer half (protocol, dispatcher, preload, executor
+implementation) landed across M3c.x and M6.x; this cut ships the
+first renderer file in the tree to call
+`window.minimal.runWorkflow(...)`, plus an advanced-gated durable
+counterpart that exercises the M6.4 durable executor.
+
+### Highlights
+
+- **Workflow runner dialog.**
+  [`src/renderer/WorkflowRunner.tsx`](../src/renderer/WorkflowRunner.tsx)
+  opens via the command palette (`Ctrl+Shift+P` → "Run inline
+  workflow", scope `session`). The dialog lets the operator pick
+  one of three built-in fixtures (`hello-world`, `command-only`,
+  `cycle-broken`), edit the workflow-graph JSON in a `<textarea>`,
+  and click **Run inline** to invoke
+  `window.minimal.runWorkflow({workflow, settings})`. The result
+  region renders the typed `WorkflowResult` envelope: `kind:"ok"`
+  shows the `workflowId`, the `auditDigest` (64-hex char SHA-256),
+  and a per-step `stepOutputs` table; `kind:"conflict"` shows the
+  dispatcher's `reason` string in a red-bordered region.
+- **Advanced-gated durable entry.** A second **Run durable
+  (advanced)** button stays disabled when
+  `localStorage("minimal.advanced") === "off"` (the M9.3 gate).
+  Flipping the gate on enables the button and routes the same
+  graph through `window.minimal.runWorkflowDurable(...)`, which
+  persists a `workflow_run` row via the M6.4 durable executor.
+  Both buttons surface the same typed envelope — durability refers
+  to persistence + restart hooks, not asynchrony.
+- **IPC seam additions.**
+  [`src/shared/protocol.ts`](../src/shared/protocol.ts) registers
+  `run-workflow-durable` with the same `MAX_DEADLINE_MS` (10 min)
+  as `run-workflow`;
+  [`src/runtime/workspace.ts`](../src/runtime/workspace.ts)
+  delegates to `runWorkflowDurable(worker, input)` and surfaces
+  `AppError` / `ZodError` as `{kind:"conflict"; reason}`;
+  [`src/preload/index.ts`](../src/preload/index.ts) exposes
+  `runWorkflowDurable` on `window.minimal`;
+  [`src/shared/types.ts`](../src/shared/types.ts) types the
+  return as the same discriminated union as `runWorkflow`. No new
+  envelope shape — the existing
+  `runWorkflowEnvelopeSchema` is reused.
+- **Cheatsheet integration.**
+  [`src/renderer/cheatsheet-data.ts`](../src/renderer/cheatsheet-data.ts)
+  gains a `Ctrl+Shift+P` → "Run inline workflow (palette)" row
+  (global scope), pointing the user at the new command.
+
+### File surface
+
+- `src/renderer/WorkflowRunner.tsx` — workflow-runner `<Modal>`,
+  three fixtures, typed envelope renderer.
+- `src/renderer/App.tsx` — `workflow.run` palette command + render
+  block.
+- `src/renderer/WorkspaceDialog.tsx` — `Dialog` union extended to
+  include `"workflow"` (workspace excluded from its prop type).
+- `src/renderer/cheatsheet-data.ts` — cheatsheet row for the new
+  command.
+- `src/renderer/style.css` — `.workflow-runner`,
+  `.workflow-result`, `.workflow-result-id`,
+  `.workflow-result-meta`, `.workflow-step-table`,
+  `.workflow-conflict` styles.
+- `src/shared/protocol.ts` — `run-workflow-durable` method + parseResult branch.
+- `src/runtime/workspace.ts` — `dispatcher.register("run-workflow-durable", …)`.
+- `src/preload/index.ts` — `runWorkflowDurable` API surface.
+- `src/shared/types.ts` — `API.runWorkflowDurable` typed return.
+- `tests/desktop/workflow-runner.spec.ts` — 4 headless DOM tests:
+  palette → dialog opens, `hello-world` → `kind:"ok"`,
+  `cycle-broken` → `kind:"conflict"`, advanced-gate enables the
+  durable button.
+- `tests/runtime/workflow-ipc.test.ts` — 3 new tests covering the
+  durable IPC seam (timeout, ok envelope + persisted row,
+  parseRequest rejection of unknown step kinds).
+- `docs/release-notes-1.2.9.md` — this release.
+
+### M9.6 preserved
+
+- Five boundary docs (`distribution`, `security`,
+  `provider-economics`, `commercial-decision`,
+  `cancel-and-walk-away`) are unchanged.
+- 14/14 M9.6 doc-freshness tests still pass.
+
+### M9.5 preserved
+
+- Pilot harness + refuse-to-spend gate is unchanged.
+- Williams 3×6 counterbalance + 20-fixture skeleton bank is
+  unchanged.
+- `pilotReport.caveats[]` literal honest-limit lines are unchanged.
+
+### M9.4 preserved
+
+- `settings.telemetry: false` default is unchanged.
+- `connect-src 'none'` CSP audit still passes.
+- `classifySourceForRetention()` retention floor still holds.
+- `diagnostics:export` canary pipeline still catches planted
+  tokens.
+
+### M9.3 preserved
+
+- `localStorage("minimal.advanced")` gate is unchanged.
+- Advanced controls gate hides managed-mode toggle + cheatsheet
+  palette actions by default.
+- Terminal host `role="log"` / `aria-live="polite"` / `aria-label`
+  contract is unchanged.
+- `--focus-ring` token + `:focus-visible` block + `forced-colors`
+  / `prefers-reduced-motion` fallbacks are unchanged.
+
 ## [1.2.8] - 2026-09-22
 
 M9.3 accessibility code delivery. Closes the code-side half of M9.3
