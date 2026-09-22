@@ -1,0 +1,14 @@
+{
+  "pilotId": "pilot-synthetic-sample",
+  "charterVersion": "1.0.0",
+  "graderVersion": "1.0.0",
+  "participantIds": ["p1", "p2", "p3", "p4", "p5", "p6"],
+  "seed": "9aa31be9",
+  "budget": {
+    "perInvocationCapUsd": 0.10,
+    "perAttemptCapUsd": 0.20,
+    "perProfileCapUsd": 5.00,
+    "warnAtFraction": 0.8
+  },
+  "canaries": []
+}

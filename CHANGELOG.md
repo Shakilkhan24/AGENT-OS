@@ -2,6 +2,90 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.6] - 2026-09-22
+
+M9.5 pilot harness + refuse-to-spend path. Closes M9.5 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+This is an opt-in research instrument; the supported prefix of
+user-facing features is unchanged from 1.2.5.
+
+### Highlights
+
+- **Pre-registration charter.** [`docs/pilot-charter.md`](../docs/pilot-charter.md)
+  locks the M9.5 study design at `charterVersion: "1.0.0"`: N=6,
+  Williams 3×6 in one balanced block, three USD caps with
+  warn-at-0.8, unknown-cost discipline. The charter is a starting
+  proposal, not a powered sample — the honest-limit disclosure is
+  surfaced as a literal `caveats[]` report field, not buried in prose.
+- **Williams 3×6 counterbalance.**
+  [`src/runtime/pilot/counterbalance.ts`](../src/runtime/pilot/counterbalance.ts)
+  exposes deterministic per-participant condition order via
+  sha256 mod 6. Every adjacent (unordered) pair appears exactly
+  4 times across the 12 ordered adjacencies in the canonical
+  square.
+- **Refuse-to-spend gate.**
+  [`src/runtime/pilot/budget-gate.ts`](../src/runtime/pilot/budget-gate.ts)
+  classifies each observation's reported spend as `ok | warn | refuse`
+  and emits `BudgetEvent` records. Refusal halts the current attempt
+  with `outcome: "abandoned"` and `failure.code = "BUDGET_EXCEEDED"`
+  (new code in `src/shared/errors.ts:Failure.code`).
+- **Grader.** [`src/runtime/pilot/grader.ts`](../src/runtime/pilot/grader.ts)
+  evaluates each fixture's `acceptance[]` rules against a normalised
+  `CapturedArtifacts` bundle and rolls them into an `AttemptOutcome`.
+  Soft rules (`mustPass: false`) record the failure on the decision
+  surface but do not reject the attempt.
+- **Runner + aggregate reporter.**
+  [`src/runtime/pilot/runner.ts`](../src/runtime/pilot/runner.ts) and
+  [`src/runtime/pilot/aggregate.ts`](../src/runtime/pilot/aggregate.ts)
+  drive a pilot end-to-end and assemble a `PilotReport`. The
+  `caveats[]` field carries the four honest-limit lines by default —
+  including the literal "this pilot cannot establish universal
+  productivity multipliers" disclaimer.
+- **20-fixture skeleton bank.** 4 fixtures per family across the 5
+  families from
+  `FUTURE/docs/research/10-evaluation-productivity.md §3` under
+  [`tests/fixtures/pilot/`](../tests/fixtures/pilot/). Schema-valid;
+  concrete acceptance-rule bodies are follow-up work. The bank shape
+  is asserted by
+  [`tests/runtime/pilot-fixtures.test.ts`](../tests/runtime/pilot-fixtures.test.ts).
+- **CLI + scripts.** [`scripts/run-pilot.mts`](../scripts/run-pilot.mts)
+  with the same exit-code contract as `diagnostics-export` (0/1/2/3).
+  `npm run pilot:run` (powered, opt-in) and `npm run pilot:synthetic`
+  (no I/O, opt-in).
+- **Gate test.** [`tests/runtime/m9_5-pilot-gate.test.ts`](../tests/runtime/m9_5-pilot-gate.test.ts)
+  exercises the runner end-to-end: 6 × 5 × 3 = 90 synthetic attempts
+  across all 5 fixture families. Evidence map mirrors the M9.0 gate
+  pattern.
+
+### File surface
+
+- `src/shared/pilot-schema.ts` — typed contract for fixtures, budgets,
+  attempt records, budget events, and the aggregate `PilotReport`.
+- `src/runtime/pilot/counterbalance.ts` — Williams 3×6 helpers.
+- `src/runtime/pilot/budget-gate.ts` — refuse-to-spend gate.
+- `src/runtime/pilot/grader.ts` — pure acceptance evaluator.
+- `src/runtime/pilot/runner.ts` — pilot orchestration core.
+- `src/runtime/pilot/aggregate.ts` — aggregate reporter.
+- `src/runtime/pilot/__tests__/{counterbalance,budget-gate,grader}.test.ts`
+  — unit tests.
+- `tests/runtime/m9_5-pilot-gate.test.ts` — gate test (synthetic).
+- `tests/runtime/pilot-fixtures.test.ts` — fixture bank discovery.
+- `tests/fixtures/pilot/*.fixture.json` — 20 fixture stubs (4 per family).
+- `tests/fixtures/pilot-synthetic-charter.json` — synthetic charter.
+- `tests/fixtures/pilot-synthetic-report.json` — checked-in sample
+  `PilotReport` produced by `npm run pilot:synthetic`.
+- `scripts/run-pilot.mts` — CLI.
+- `docs/pilot-charter.md` — pre-registration charter.
+- `docs/runbooks/run-pilot.md` — operator runbook.
+- `docs/release-notes-1.2.6.md` — release notes for this cut.
+
+### M9.4 preserved
+
+- `settings.telemetry: false` default is unchanged.
+- `connect-src 'none'` CSP audit still passes.
+- `classifySourceForRetention()` retention floor still holds.
+- `diagnostics:export` canary pipeline still catches planted tokens.
+
 ## [1.2.5] - 2026-09-22
 
 M9.4 diagnostics cut. Closes M9.4 in

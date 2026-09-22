@@ -1,6 +1,6 @@
 {
   "name": "minimal",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "main": "dist/main/index.cjs",
   "scripts": {
     "build": "node scripts/build.mjs && vite build",
@@ -20,7 +20,7 @@
     "bench": "tsx scripts/bench.mts",
     "diagnostics:export": "tsx scripts/diagnostics-export.mts",
     "pilot:run": "tsx scripts/run-pilot.mts",
-    "pilot:synthetic": "tsx scripts/run-pilot.mts --synthetic --fixtures-dir tests/fixtures/pilot --out pilot-out",
+    "pilot:synthetic": "tsx scripts/run-pilot.mts tests/fixtures/pilot-synthetic-charter.json --fixtures-dir tests/fixtures/pilot --out pilot-out --synthetic",
     "hooks:install": "node scripts/install-hooks.mjs",
     "hooks:uninstall": "node scripts/install-hooks.mjs --uninstall"
   },

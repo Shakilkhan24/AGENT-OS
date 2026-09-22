@@ -11,6 +11,11 @@ cmd.sh
 !.env.example
 .minimal-*-test-*/
 
+# M9.5 — pilot harness output. Operators point --out here; the harness
+# never auto-invokes, so the directory is opt-in only.
+/pilot-out/
+pilot-out/
+
 # M9.2 — integrity manifest emitted at the `retained` release phase.
 /release/**/MANIFEST.sha256
 /release/**/*.sha256
