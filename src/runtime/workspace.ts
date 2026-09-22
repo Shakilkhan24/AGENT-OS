@@ -29,6 +29,7 @@ import {
   requestRunStop,
 } from "./orchestration/managed-actions";
 import { runWorkflow } from "./orchestration/workflow-execute";
+import { runWorkflowDurable } from "./orchestration/workflow-durable";
 import { workflowResultSchema } from "../shared/workflow-executor-schema";
 import { mintBootIdentity, purgeStaleBootIdentities, type BootIdentity } from "./db/boot-identity";
 import {
@@ -403,6 +404,29 @@ export class RuntimeWorkspace {
         // Re-parse through the strict result schema before crossing
         // the IPC boundary so a malformed in-process value never
         // reaches the renderer.
+        const parsed = workflowResultSchema.parse(result);
+        return { kind: "ok" as const, result: parsed };
+      } catch (error) {
+        if (error instanceof AppError) {
+          return { kind: "conflict" as const, reason: error.message };
+        }
+        if (error instanceof z.ZodError) {
+          const first = error.issues[0]?.message ?? "invalid input";
+          return { kind: "conflict" as const, reason: first };
+        }
+        throw error;
+      }
+    });
+    // M6.4 — durable workflow execution. Same envelope shape as
+    // `run-workflow`. The runtime persists a `workflow_run` row +
+    // per-step rows before/in lockstep with execution; a restart
+    // resumes from the last completed step. Renderer consumers
+    // (currently the WorkflowRunner dialog) gate this method
+    // behind the M9.3 advanced-controls flag.
+    dispatcher.register("run-workflow-durable", async ([input]) => {
+      const worker = this.ownedDb.worker;
+      try {
+        const result = await runWorkflowDurable(worker, input);
         const parsed = workflowResultSchema.parse(result);
         return { kind: "ok" as const, result: parsed };
       } catch (error) {

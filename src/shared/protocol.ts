@@ -174,6 +174,12 @@ export const methods = {
   // `MAX_DEADLINE_MS` is mandatory: an `agent` step can run for the
   // full 10-minute budget, and the graph can chain many of them.
   "run-workflow": method(z.tuple([runWorkflowInputSchema]), z.unknown(), MAX_DEADLINE_MS),
+  // M6.4 — durable workflow executor. Same envelope shape as
+  // `run-workflow`; the difference is that `runWorkflowDurable`
+  // persists `workflow_run` + per-step rows before/during execution
+  // so the run survives a restart. Returns the same
+  // `WorkflowResult` envelope (typed).
+  "run-workflow-durable": method(z.tuple([runWorkflowInputSchema]), z.unknown(), MAX_DEADLINE_MS),
   // M7 — schedule management. Every handler runs the input through
   // the dispatcher's Zod parse, so a malformed wire value fails the
   // IPC boundary instead of leaking into the dispatcher. The
@@ -261,6 +267,16 @@ export function parseResult<M extends Method>(method: M, args: InputArgs<M>, val
     // envelope. Re-parse here so the renderer's typed surface is
     // trustworthy: a malformed wire value fails the strict Zod schemas
     // instead of silently passing through `z.unknown()`.
+    const envelope = runWorkflowEnvelopeSchema.parse(result);
+    if (envelope.kind === "ok") workflowResultSchema.parse(envelope.result);
+    return envelope as Result<M>;
+  }
+  if (method === "run-workflow-durable") {
+    // Mirrors the `run-workflow` envelope. The dispatcher handler
+    // delegates to `runWorkflowDurable(...)`, which writes a
+    // `workflow_run` row before any step is dispatched. The typed
+    // envelope is identical so the renderer can share the result
+    // table UI between the two buttons.
     const envelope = runWorkflowEnvelopeSchema.parse(result);
     if (envelope.kind === "ok") workflowResultSchema.parse(envelope.result);
     return envelope as Result<M>;

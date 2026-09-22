@@ -162,5 +162,14 @@ const api: API = {
       | { kind: "ok"; result: import("../shared/workflow-executor-schema").WorkflowResult }
       | { kind: "conflict"; reason: string }
     >,
+  // M6.4 — durable workflow execution. Same envelope shape as
+  // `runWorkflow`. The runtime persists a `workflow_run` row so a
+  // restart resumes from the last completed step. Renderer
+  // consumers gate this behind the M9.3 advanced-controls flag.
+  runWorkflowDurable: (input) =>
+    call("run-workflow-durable", input) as Promise<
+      | { kind: "ok"; result: import("../shared/workflow-executor-schema").WorkflowResult }
+      | { kind: "conflict"; reason: string }
+    >,
 };
 contextBridge.exposeInMainWorld("minimal", api);

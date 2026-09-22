@@ -72,9 +72,11 @@ test("palette → Run inline workflow opens the dialog and focuses the JSON edit
     await expect(dialog.getByRole("textbox", { name: "Workflow graph JSON" })).toBeVisible();
     // The Run inline button is the enabled primary action.
     await expect(dialog.getByTestId("workflow-run-inline")).toBeEnabled();
-    // The Run durable stub is rendered but disabled until
-    // Advanced controls are on (gated in Commit 2).
-    await expect(dialog.getByTestId("workflow-run-durable-stub")).toBeDisabled();
+    // The Run durable button is rendered but disabled when Advanced
+    // controls are off (the M9.3 gate, default off).
+    const durable = dialog.getByTestId("workflow-run-durable");
+    await expect(durable).toBeDisabled();
+    await expect(durable).toHaveAttribute("aria-disabled", "true");
   } finally { await ctx.close(); }
 });
 
@@ -127,5 +129,35 @@ test("Run inline on the cycle-broken fixture renders kind:'conflict' red-bordere
     // wraps the cycle gate's reason string.
     const text = await conflict.textContent();
     expect(text?.toLowerCase()).toMatch(/cycle|dependency|edge/);
+  } finally { await ctx.close(); }
+});
+
+test("Run durable button enables only after the M9.3 advanced-controls gate is on", async () => {
+  const ctx = await fixture();
+  try {
+    const { page } = ctx;
+    // Set the gate BEFORE the renderer mounts so the initial
+    // `isAdvancedEnabled()` read returns true.
+    await page.addInitScript(() => {
+      localStorage.setItem("minimal.advanced", "on");
+    });
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "WorkflowRunner", exact: true })).toBeVisible();
+    await page.locator("body").click();
+    await page.keyboard.press("Control+Shift+P");
+    await page.getByRole("dialog", { name: "Command palette" })
+      .getByRole("textbox", { name: "Search" })
+      .fill("workflow");
+    await page.getByRole("dialog", { name: "Command palette" })
+      .getByRole("option", { name: /Run inline workflow/ })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "Workflow runner" });
+    const durable = dialog.getByTestId("workflow-run-durable");
+    await expect(durable).toBeEnabled();
+    // Clicking Run durable with the hello-world graph also returns a
+    // kind:"ok" envelope (the typed envelope is the same; the
+    // difference is that the runtime persists a `workflow_run` row).
+    await durable.click();
+    await expect(dialog.getByTestId("workflow-result")).toBeVisible({ timeout: 8000 });
   } finally { await ctx.close(); }
 });

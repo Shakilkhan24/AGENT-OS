@@ -328,6 +328,17 @@ export interface API {
     | { kind: "ok"; result: WorkflowResult }
     | { kind: "conflict"; reason: string }
   >;
+  // M6.4 — durable workflow execution. Same envelope shape as
+  // `runWorkflow`. The runtime persists `workflow_run` + per-step
+  // rows so a restart resumes from the last completed step.
+  // Renderer consumers gate this behind `isAdvancedEnabled()`.
+  runWorkflowDurable(input: {
+    workflow: WorkflowGraphInput;
+    settings?: WorkflowExecutorSettingsInput | null;
+  }): Promise<
+    | { kind: "ok"; result: WorkflowResult }
+    | { kind: "conflict"; reason: string }
+  >;
 }
 declare global {
   interface Window {

@@ -23,7 +23,7 @@
  * IPC channels are introduced here — the existing `run-workflow`
  * method is reused.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal } from "./components";
 import { isAdvancedEnabled } from "./AdvancedControls";
 
@@ -195,13 +195,25 @@ export function WorkflowRunner({ close }: { close: () => void }) {
   const [graphJson, setGraphJson] = useState<string>(FIXTURES[0].json);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<InlineResult | null>(null);
-  const advanced = useMemo(() => isAdvancedEnabled(), []);
+  // M9.3 advanced-controls gate (per-window). The durable runner is
+  // an advanced surface: by default the button stays disabled and
+  // the tooltip points the user to the gate. When the flag is on,
+  // the button enables and calls `window.minimal.runWorkflowDurable`.
+  const [advanced, setAdvanced] = useState<boolean>(() => isAdvancedEnabled());
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     const next = FIXTURES.find((f) => f.id === fixtureId);
     if (next) setGraphJson(next.json);
   }, [fixtureId]);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "minimal.advanced") setAdvanced(isAdvancedEnabled());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const runInline = async () => {
     setRunning(true);
@@ -216,6 +228,31 @@ export function WorkflowRunner({ close }: { close: () => void }) {
       // it as-is — the dispatcher's envelope unwraps the typed
       // WorkflowResult under `kind: "ok"` and surfaces validation
       // failures as `kind: "conflict"`.
+      if (response.kind === "ok") {
+        setResult(response as InlineResultOk);
+      } else {
+        setResult(response as InlineResultConflict);
+      }
+    } catch (error) {
+      setResult({
+        kind: "conflict",
+        reason: `Renderer parse error: ${(error as Error).message ?? String(error)}`,
+      });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const runDurable = async () => {
+    if (!advanced) return;
+    setRunning(true);
+    setResult(null);
+    try {
+      const workflow = JSON.parse(graphJson);
+      const response = await window.minimal.runWorkflowDurable({
+        workflow,
+        settings: DEFAULT_SETTINGS,
+      });
       if (response.kind === "ok") {
         setResult(response as InlineResultOk);
       } else {
@@ -282,13 +319,15 @@ export function WorkflowRunner({ close }: { close: () => void }) {
           <button
             type="button"
             className="secondary"
-            disabled
+            disabled={running || !advanced}
+            onClick={() => void runDurable()}
             title={
               advanced
-                ? "Durable runner lands in the next milestone."
+                ? "Run the workflow through the M6.4 durable executor (workflow_run row + per-step persistence)."
                 : "Enable Advanced controls (Presets → Advanced controls) to unlock the durable runner."
             }
-            data-testid="workflow-run-durable-stub"
+            data-testid="workflow-run-durable"
+            aria-disabled={running || !advanced}
           >
             Run durable (advanced)
           </button>
