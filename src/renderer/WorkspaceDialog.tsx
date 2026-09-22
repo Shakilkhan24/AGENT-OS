@@ -4,12 +4,13 @@ import type { Preset } from "../shared/types";
 import { Field, Modal } from "./components";
 import { AdvancedControls } from "./AdvancedControls";
 
-export type Dialog = "create" | "rename" | "delete" | "launch" | "terminal-name" | "presets" | "help" | "cheatsheet" | "palette";
+export type Dialog = "create" | "rename" | "delete" | "launch" | "terminal-name" | "presets" | "help" | "cheatsheet" | "palette" | "workflow";
 export function WorkspaceDialog({ dialog, busy, error, close, submit, sessionName, terminalLabel,
   directory, setDirectory, draftPresets, setDraftPresets, report }: {
   // M9.3: `cheatsheet` and `palette` are routed to their own dialog
   // components in `App.tsx`, so they're excluded here.
-  dialog: Exclude<Dialog, "launch" | "cheatsheet" | "palette">;
+  // M6.1 wiring: `workflow` is also routed to its own component.
+  dialog: Exclude<Dialog, "launch" | "cheatsheet" | "palette" | "workflow">;
   busy: boolean;
   error: string;
   close(): void;

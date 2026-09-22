@@ -1505,3 +1505,98 @@ h2 {
   color: #c9b59b;
   background: #2a2218;
 }
+
+/* M6.1 wiring: workflow runner dialog. Compact, no flair. */
+.workflow-runner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.workflow-runner textarea {
+  font-family: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  width: 100%;
+  resize: vertical;
+}
+.workflow-result {
+  border: 1px solid #30372f;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #161a17;
+}
+.workflow-result h3 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 0 0 6px;
+  font-size: 13px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #c5edaa;
+}
+.workflow-result-id {
+  font-family: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #95a08a;
+}
+.workflow-result-meta {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: #95a08a;
+}
+.workflow-result-meta code {
+  color: #c5edaa;
+  font-size: 10px;
+}
+.workflow-step-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.workflow-step-table th,
+.workflow-step-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #272d28;
+  vertical-align: top;
+}
+.workflow-step-table th {
+  color: #95a08a;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-size: 9px;
+}
+.workflow-step-table pre {
+  margin: 0;
+  font-family: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  font-size: 10px;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow: auto;
+}
+.workflow-conflict {
+  border: 1px solid #6c3535;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #2a1818;
+}
+.workflow-conflict h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #f3a6a6;
+}
+.workflow-conflict pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: #f3d2d2;
+}

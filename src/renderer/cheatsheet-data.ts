@@ -25,4 +25,8 @@ export const CHEATSHEET: readonly CheatsheetEntry[] = [
   { keys: "\u2190 / \u2192", description: "Move between terminal tabs (roving)", scope: "tabs" },
   { keys: "Home / End", description: "Jump to first / last terminal tab", scope: "tabs" },
   { keys: "Ctrl+Shift+C / V", description: "Copy / paste a terminal selection", scope: "terminal" },
+  // M6.1 wiring — the workflow runner is reachable from the
+  // command palette (`Ctrl+Shift+P` → "Run inline workflow"). The
+  // keystone is the IPC seam `window.minimal.runWorkflow(...)`.
+  { keys: "Ctrl+Shift+P", description: "Run inline workflow (palette)", scope: "global" },
 ];

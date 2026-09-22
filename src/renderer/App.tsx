@@ -26,6 +26,7 @@ import { useWorkspace } from "./useWorkspace";
 import { useGlobalShortcuts } from "./useGlobalShortcuts";
 import { KeyboardCheatsheet } from "./KeyboardCheatsheet";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
+import { WorkflowRunner } from "./WorkflowRunner";
 import type { PaletteCommand } from "./command-logic";
 const Terminal = lazy(() =>
   import("./Terminal").then((module) => ({ default: module.Terminal })),
@@ -297,6 +298,15 @@ export function App() {
       {
         command: { id: "inbox.toggle", label: "Open attention inbox", scope: "session" },
         run: () => setInboxOpen((value) => !value),
+      },
+      {
+        // M6.1 wiring — first renderer-side call site for
+        // `window.minimal.runWorkflow(...)`. Routes to the
+        // WorkflowRunner dialog. Scope `session` so the dialog
+        // opens once a session is focused, mirroring the existing
+        // managed/explorer pattern.
+        command: { id: "workflow.run", label: "Run inline workflow", scope: "session" },
+        run: () => setDialog("workflow"),
       },
       {
         command: { id: "stop.runtime", label: "Stop the runtime", scope: "global" },
@@ -747,7 +757,7 @@ export function App() {
           launch={launch}
         />
       )}
-      {dialog && dialog !== "launch" && dialog !== "cheatsheet" && dialog !== "palette" && (
+      {dialog && dialog !== "launch" && dialog !== "cheatsheet" && dialog !== "palette" && dialog !== "workflow" && (
         <WorkspaceDialog dialog={dialog} busy={busy} error={error} close={() => setDialog(undefined)}
           submit={submit} sessionName={session?.name} terminalLabel={terminal?.label}
           directory={directory} setDirectory={setDirectory} draftPresets={draftPresets}
@@ -768,6 +778,11 @@ export function App() {
           sessionFocused={Boolean(session)}
           terminalFocused={Boolean(terminal)}
         />
+      )}
+      {/* M6.1 wiring — workflow runner dialog. First renderer-side call
+          site for `window.minimal.runWorkflow(...)`. */}
+      {dialog === "workflow" && (
+        <WorkflowRunner close={() => setDialog(undefined)} />
       )}
       {/* M3c.3 — slide-in attention inbox panel. Renders nothing when
           closed OR when the projection is unavailable / empty. */}
