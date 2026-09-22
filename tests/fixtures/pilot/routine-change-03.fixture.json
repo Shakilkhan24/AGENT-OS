@@ -1,0 +1,49 @@
+{
+  "id": "routine-change-03",
+  "family": "routine-change",
+  "displayName": "routine-change-03 (skeleton stub)",
+  "baseRevision": "main@00000000",
+  "allowedScope": ["src/routine-change/03/**", "tests/fixtures/pilot/routine-change-03/**"],
+  "contextInputs": [],
+  "environmentImage": "ubuntu-22.04",
+  "hardwareAllocation": "2 vCPU / 4 GiB",
+  "timeoutMinutes": 30,
+  "attemptBudget": 3,
+  "graderVersion": "1.0.0",
+  "acceptance": [
+    {
+      "kind": "checks-pass",
+      "label": "routine-change-03-lint",
+      "description": "skeleton rule body — concrete checks follow-up work",
+      "mustPass": true,
+      "requiredCheckNames": ["lint"]
+    },
+    {
+      "kind": "cost-within",
+      "label": "routine-change-03-cost-cap",
+      "description": "skeleton rule body — cap is a placeholder",
+      "mustPass": false,
+      "capUsd": 0.05
+    }
+  ],
+  "drivers": [
+    {
+      "condition": "terminal-baseline",
+      "invocation": "manual-terminal",
+      "providerPin": "n/a",
+      "reference": "docs/runbooks/run-pilot.md"
+    },
+    {
+      "condition": "native-provider",
+      "invocation": "claude",
+      "providerPin": "1.2.5",
+      "reference": "docs/compatibility.md"
+    },
+    {
+      "condition": "minimal",
+      "invocation": "minimal-dispatch",
+      "providerPin": "1.2.5",
+      "reference": "src/runtime/pilot/runner.ts"
+    }
+  ]
+}
