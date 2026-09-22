@@ -110,14 +110,20 @@ export function Terminal({
         })
         .catch(report);
     term.attachCustomKeyEventHandler((event) => {
+      // M9.3: only hijack Ctrl+Shift+C/V when the user has actively selected
+      // text inside the terminal. This lets an assistive technology (e.g.
+      // Orca, NVDA) drive the terminal's own copy/paste when nothing is
+      // selected — the previous behaviour swallowed the keystroke and broke
+      // AT-driven paste.
       if (
         event.ctrlKey &&
         event.shiftKey &&
         ["c", "v"].includes(event.key.toLowerCase())
       ) {
+        if (!term.hasSelection()) return true;
         if (event.type === "keydown") {
           if (event.key.toLowerCase() === "c") {
-            if (term.hasSelection()) void copy();
+            void copy();
           } else void pasteText();
         }
         event.preventDefault();
@@ -189,8 +195,14 @@ export function Terminal({
   return (
     <div className="terminal-wrap">
       <div
+        // M9.3: the host is `role="log"` + `aria-live="polite"` so a screen
+        // reader announces new output as it arrives. `aria-label` gives the
+        // live region a stable name independent of the visible caption.
         className="terminal-surface"
         ref={host}
+        role="log"
+        aria-live="polite"
+        aria-label={`Terminal output for ${terminal.label}`}
         data-testid="terminal-surface"
       />
       {terminal.status === "missing" && (
@@ -234,6 +246,20 @@ export function Terminal({
                 : "Connecting…"}
         <span className="caption-right">
           {terminal.pid ? `PID ${terminal.pid}` : ""} · bash / tmux
+        </span>
+        {/* M9.3: visually-hidden mirror of the connection-state text so a
+            screen reader announces connect/disconnect/exit transitions
+            without the visible dot being the only signal. */}
+        <span className="visually-hidden" aria-live="polite" data-testid="terminal-status">
+          {terminal.status === "exited"
+            ? `Process exited with code ${terminal.exitCode ?? "unknown"}`
+            : connected
+              ? `Terminal ${terminal.label} connected`
+              : terminal.status === "missing"
+                ? `Terminal ${terminal.label} unavailable`
+                : connectionError
+                  ? `Terminal ${terminal.label} disconnected`
+                  : `Terminal ${terminal.label} connecting`}
         </span>
       </div>
     </div>

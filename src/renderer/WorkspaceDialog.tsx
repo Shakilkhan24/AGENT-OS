@@ -2,11 +2,14 @@ import type { Dispatch, FormEvent, SetStateAction } from "react";
 import { Check, FolderOpen, Plus, X } from "lucide-react";
 import type { Preset } from "../shared/types";
 import { Field, Modal } from "./components";
+import { AdvancedControls } from "./AdvancedControls";
 
-export type Dialog = "create" | "rename" | "delete" | "launch" | "terminal-name" | "presets" | "help";
+export type Dialog = "create" | "rename" | "delete" | "launch" | "terminal-name" | "presets" | "help" | "cheatsheet" | "palette";
 export function WorkspaceDialog({ dialog, busy, error, close, submit, sessionName, terminalLabel,
   directory, setDirectory, draftPresets, setDraftPresets, report }: {
-  dialog: Exclude<Dialog, "launch">;
+  // M9.3: `cheatsheet` and `palette` are routed to their own dialog
+  // components in `App.tsx`, so they're excluded here.
+  dialog: Exclude<Dialog, "launch" | "cheatsheet" | "palette">;
   busy: boolean;
   error: string;
   close(): void;
@@ -219,6 +222,9 @@ export function WorkspaceDialog({ dialog, busy, error, close, submit, sessionNam
                 be installed on this machine. Existing terminals keep their
                 original command.
               </p>
+              {/* M9.3 — Advanced controls gate. Hidden behind a `<details>`
+                  so the gate doesn't steal focus from the preset editor. */}
+              <AdvancedControls />
             </div>
           )}
           <div className="modal-actions">

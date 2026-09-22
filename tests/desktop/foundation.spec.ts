@@ -102,3 +102,23 @@ test("an acknowledged Unicode draft survives SIGKILL and restores as unsaved", a
     expect(await readFile(path.join(ctx.root, "note.txt"), "utf8")).toBe("original on disk\n");
   } finally { await ctx.close(); }
 });
+
+// M9.3 — a11y attribute assertions on the terminal host. The actual
+// screen-reader reading behaviour is qualified manually and recorded
+// in `docs/screen-reader-qualification.md`; this test is the headless
+// DOM contract for the terminal-host attributes.
+test("terminal host has role=log, aria-live=polite, and an aria-label matching the terminal label", async () => {
+  const ctx = await fixture();
+  try {
+    const { page } = ctx;
+    await page.evaluate(async () => {
+      const snapshot = await window.minimal.snapshot();
+      await window.minimal.createTerminals(snapshot.sessions[0].id, snapshot.presets[0].id, 1, "");
+    });
+    const surface = page.getByTestId("terminal-surface");
+    await expect(surface).toHaveAttribute("role", "log");
+    await expect(surface).toHaveAttribute("aria-live", "polite");
+    const label = await surface.getAttribute("aria-label");
+    expect(label).toMatch(/^Terminal output for /);
+  } finally { await ctx.close(); }
+});
