@@ -390,3 +390,123 @@ export const runWorkflowConflictResultSchema = z
   })
   .strict();
 export type RunWorkflowConflictResult = z.infer<typeof runWorkflowConflictResultSchema>;
+
+// ---------------------------------------------------------------------------
+// M6.4 — live workflow-run snapshot (poll IPC surface)
+// ---------------------------------------------------------------------------
+
+/**
+ * Status enum of a `workflow_run` row. Mirrors
+ * `src/runtime/db/schema.ts:workflowRunRowSchema`. Re-declared here
+ * (rather than imported from `runtime/db/schema.ts`) because the
+ * shared layer is renderer-reachable and the runtime layer depends
+ * on shared — never the other way around. Drift is caught by
+ * the IPC re-parse in `protocol.ts:parseResult`.
+ */
+export const workflowRunStatusEnumSchema = z.enum([
+  "running", "completed", "failed", "cancelled",
+]);
+export type WorkflowRunStatus = z.infer<typeof workflowRunStatusEnumSchema>;
+
+export const workflowRunRowWireSchema = z
+  .object({
+    uuid: z.string().uuid(),
+    workflow_id: z.string().min(1).max(128),
+    status: workflowRunStatusEnumSchema,
+    created_by: z.string().min(0).max(256),
+    owner_identity: z.string().min(0).max(256),
+    settings_json: z.string(),
+    graph_json: z.string(),
+    cancel_requested_at: z.string().nullable(),
+    cancel_requested_by: z.string().nullable(),
+    started_at: z.string().datetime(),
+    ended_at: z.string().datetime().nullable(),
+    terminal_outcome: z.enum(["completed", "failed", "cancelled"]).nullable(),
+    audit_digest: z.string().nullable(),
+  })
+  .strict();
+export type WorkflowRunRowWire = z.infer<typeof workflowRunRowWireSchema>;
+
+/**
+ * Per-step output row on the wire. Mirrors
+ * `src/runtime/db/schema.ts:workflowStepOutputRowSchema`.
+ */
+export const workflowStepOutputRowWireSchema = z
+  .object({
+    uuid: z.string().uuid(),
+    workflow_run_uuid: z.string().uuid(),
+    step_id: z.string().min(1).max(128),
+    kind: z.string().min(1).max(64),
+    output_json: z.string(),
+    output_digest: z.string().regex(/^[0-9a-f]{64}$/),
+    completed_at: z.string().datetime(),
+  })
+  .strict();
+export type WorkflowStepOutputRowWire = z.infer<typeof workflowStepOutputRowWireSchema>;
+
+/**
+ * Per-step lifecycle state row on the wire. Mirrors
+ * `src/runtime/db/schema.ts:workflowStepStateRowSchema`.
+ */
+export const workflowStepLifecycleEnumSchema = z.enum([
+  "running", "waiting", "completed", "failed", "cancelled",
+]);
+export type WorkflowStepLifecycleWire = z.infer<typeof workflowStepLifecycleEnumSchema>;
+
+export const workflowStepStateRowWireSchema = z
+  .object({
+    uuid: z.string().uuid(),
+    workflow_run_uuid: z.string().uuid(),
+    step_id: z.string().min(1).max(128),
+    kind: z.string().min(1).max(64),
+    state: workflowStepLifecycleEnumSchema,
+    dispatched_at: z.string().datetime().nullable(),
+    wake_at: z.string().datetime().nullable(),
+    failure_json: z.string().nullable(),
+    updated_at: z.string().datetime(),
+  })
+  .strict();
+export type WorkflowStepStateRowWire = z.infer<typeof workflowStepStateRowWireSchema>;
+
+/**
+ * The shape returned by the `get-workflow-run` IPC method.
+ *
+ * Discriminated on `kind`:
+ * - `"absent"` — no `workflow_run` row exists for the
+ *   `workflowId` yet (the renderer polled before the executor
+ *   started the run, or the workflowId is unknown). The renderer
+ *   surfaces an empty progress strip; the next tick may pick up
+ *   a row.
+ * - `"present"` — a row exists, plus the per-step arrays
+ *   (`stepOutputs` for completed steps; `stepStates` for the
+ *   lifecycle state of every dispatched step). The renderer's
+ *   progress strip reads `stepStates`; the result envelope from
+ *   the original `runWorkflowDurable` call carries the final
+ *   per-step outputs that the table renders below the strip.
+ */
+export const workflowRunSnapshotSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("absent"),
+      workflowId: z.string().min(1).max(128),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("present"),
+      run: workflowRunRowWireSchema,
+      stepOutputs: z.array(workflowStepOutputRowWireSchema).max(64),
+      stepStates: z.array(workflowStepStateRowWireSchema).max(64),
+    })
+    .strict(),
+]);
+export type WorkflowRunSnapshot = z.infer<typeof workflowRunSnapshotSchema>;
+
+/** Input envelope for `get-workflow-run`. */
+export const getWorkflowRunInputSchema = z
+  .object({
+    workflowId: z.string().min(1).max(128),
+  })
+  .strict();
+export type GetWorkflowRunInput = z.input<typeof getWorkflowRunInputSchema>;
+export type GetWorkflowRunArgs = z.output<typeof getWorkflowRunInputSchema>;

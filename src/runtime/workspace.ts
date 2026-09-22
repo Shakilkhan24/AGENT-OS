@@ -30,7 +30,12 @@ import {
 } from "./orchestration/managed-actions";
 import { runWorkflow } from "./orchestration/workflow-execute";
 import { runWorkflowDurable } from "./orchestration/workflow-durable";
-import { workflowResultSchema } from "../shared/workflow-executor-schema";
+import {
+  workflowResultSchema,
+  workflowRunSnapshotSchema,
+  type GetWorkflowRunInput,
+} from "../shared/workflow-executor-schema";
+import { loadWorkflowRunSnapshot } from "./db/workflow-runs";
 import { mintBootIdentity, purgeStaleBootIdentities, type BootIdentity } from "./db/boot-identity";
 import {
   publishScheduleRevision as dispatchPublishRevision,
@@ -439,6 +444,30 @@ export class RuntimeWorkspace {
         }
         throw error;
       }
+    });
+    // M6.4 — live workflow-run snapshot. Read-side IPC used by
+    // the renderer's polling seam. Returns a typed
+    // `WorkflowRunSnapshot` discriminated on `kind` ("absent" |
+    // "present"). `AppError` / `ZodError` surface as a real IPC
+    // `failure` (not a structured envelope) — this is a read, not
+    // a write; the renderer treats the failure as "no progress
+    // this tick" and keeps polling until the run finalizes or the
+    // dialog closes.
+    dispatcher.register("get-workflow-run", async ([input]: [GetWorkflowRunInput]) => {
+      const worker = this.ownedDb.worker;
+      const snapshot = await loadWorkflowRunSnapshot(worker, input.workflowId);
+      if (!snapshot.run) {
+        return workflowRunSnapshotSchema.parse({
+          kind: "absent",
+          workflowId: input.workflowId,
+        });
+      }
+      return workflowRunSnapshotSchema.parse({
+        kind: "present",
+        run: snapshot.run,
+        stepOutputs: snapshot.stepOutputs,
+        stepStates: snapshot.stepStates,
+      });
     });
     // M7 — schedule management IPC. The dispatcher handlers do the
     // work; `AppError` becomes a structured `{kind: "conflict",

@@ -171,5 +171,15 @@ const api: API = {
       | { kind: "ok"; result: import("../shared/workflow-executor-schema").WorkflowResult }
       | { kind: "conflict"; reason: string }
     >,
+  // M6.4 — live workflow-run snapshot. Read-side IPC used by
+  // `WorkflowRunner.tsx`'s polling seam. Returns a typed
+  // `WorkflowRunSnapshot` discriminated on `kind` ("absent" |
+  // "present"). Matches the `view-session-memory` style — no
+  // envelope; failures surface as a real IPC `failure` and the
+  // renderer treats them as "no progress this tick".
+  getWorkflowRun: (input) =>
+    call("get-workflow-run", input) as Promise<
+      import("../shared/workflow-executor-schema").WorkflowRunSnapshot
+    >,
 };
 contextBridge.exposeInMainWorld("minimal", api);

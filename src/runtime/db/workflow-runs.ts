@@ -345,6 +345,48 @@ export async function readStepOutput(
   });
 }
 
+/**
+ * Read the full live state of a durable workflow run for the
+ * renderer's polling seam (`get-workflow-run` IPC).
+ *
+ * The shape is `WorkflowRunSnapshot` from
+ * `src/shared/workflow-executor-schema.ts`. The function returns
+ * `undefined` for `run` when no row exists for `workflowId` so a
+ * renderer can poll before the durable row is written without
+ * surfacing an error — the executor's `startWorkflowRun` only
+ * runs at the moment of dispatch, so a renderer polling on a
+ * fixed cadence sees `{kind:"absent"}` on the very first tick
+ * and `{kind:"present", ...}` thereafter.
+ *
+ * The `stepOutputs` and `stepStates` arrays are read in
+ * parallel-but-non-transactional: each helper re-parses its rows
+ * through its own strict schema so a malformed row (the kind of
+ * thing a future migration could introduce) fails the IPC
+ * boundary instead of silently passing through.
+ */
+export async function loadWorkflowRunSnapshot(
+  worker: DbWorker,
+  workflowId: string,
+): Promise<
+  | { run: undefined; stepOutputs: []; stepStates: [] }
+  | {
+      run: WorkflowRunRow;
+      runUuid: string;
+      stepOutputs: WorkflowStepOutputRow[];
+      stepStates: WorkflowStepStateRow[];
+    }
+> {
+  const run = await findWorkflowRunByWorkflowId(worker, workflowId);
+  if (!run) {
+    return { run: undefined, stepOutputs: [], stepStates: [] };
+  }
+  const [stepOutputs, stepStates] = await Promise.all([
+    listStepOutputs(worker, run.uuid),
+    listStepStates(worker, run.uuid),
+  ]);
+  return { run, runUuid: run.uuid, stepOutputs, stepStates };
+}
+
 // ---------------------------------------------------------------------------
 // Cancellation intent
 // ---------------------------------------------------------------------------

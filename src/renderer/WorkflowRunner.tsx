@@ -54,6 +54,39 @@ interface InlineResultConflict {
 }
 type InlineResult = InlineResultOk | InlineResultConflict;
 
+/**
+ * Minimal shape we render in the progress strip after a durable
+ * run. Mirrors `WorkflowRunSnapshot` from
+ * `src/shared/workflow-executor-schema.ts` — the runtime validates
+ * the wire shape; this is just what the renderer shows without
+ * re-deriving Zod. `kind: "absent"` is the "no row yet" shape the
+ * runtime returns when the renderer polls before the durable
+ * executor has written its `workflow_run` row.
+ */
+interface InlineProgressPresent {
+  kind: "present";
+  run: {
+    uuid: string;
+    workflow_id: string;
+    status: "running" | "completed" | "failed" | "cancelled";
+    started_at: string;
+    ended_at: string | null;
+  };
+  stepStates: ReadonlyArray<{
+    step_id: string;
+    kind: string;
+    state: "running" | "waiting" | "completed" | "failed" | "cancelled";
+    dispatched_at: string | null;
+    wake_at: string | null;
+    updated_at: string;
+  }>;
+}
+interface InlineProgressAbsent {
+  kind: "absent";
+  workflowId: string;
+}
+type InlineProgress = InlineProgressPresent | InlineProgressAbsent;
+
 const HELLO_WORLD_GRAPH = JSON.stringify(
   {
     workflowId: "hello-world",
@@ -200,6 +233,15 @@ export function WorkflowRunner({ close }: { close: () => void }) {
   // the tooltip points the user to the gate. When the flag is on,
   // the button enables and calls `window.minimal.runWorkflowDurable`.
   const [advanced, setAdvanced] = useState<boolean>(() => isAdvancedEnabled());
+  // M6.4 — live poll state. After a successful **Run durable** the
+  // renderer starts a `setInterval` and reads the typed
+  // `WorkflowRunSnapshot` from `window.minimal.getWorkflowRun(...)`.
+  // The interval stops when `run.status !== "running"` so the
+  // progress strip freezes on the final row state (the table below
+  // the strip carries the typed `WorkflowResult` outputs the
+  // executor returned).
+  const [pollWorkflowId, setPollWorkflowId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<InlineProgress | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -214,6 +256,43 @@ export function WorkflowRunner({ close }: { close: () => void }) {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
+
+  // M6.4 — live poll loop. Fires every `cadenceMs` while
+  // `pollWorkflowId !== null`. The cadence is
+  // `Math.max(250, DEFAULT_SETTINGS.waitPollMs)` so the renderer
+  // reads at most four times a second; on each tick the IPC
+  // returns the typed `WorkflowRunSnapshot`. The interval is
+  // cleared on unmount and whenever the polled run finalizes
+  // (`run.status !== "running"`).
+  useEffect(() => {
+    if (!pollWorkflowId) return;
+    const cadenceMs = Math.max(250, DEFAULT_SETTINGS.waitPollMs);
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const snapshot = await window.minimal.getWorkflowRun({ workflowId: pollWorkflowId });
+        if (cancelled) return;
+        setProgress(snapshot as InlineProgress);
+        if (snapshot.kind === "present" && snapshot.run.status !== "running") {
+          setPollWorkflowId(null);
+        }
+      } catch {
+        // Polling failures are non-recoverable for a single tick;
+        // keep polling on the next tick. The next
+        // `runWorkflowDurable(...)` will surface real IPC failures.
+        if (cancelled) return;
+      }
+    };
+    const interval = setInterval(() => { void tick(); }, cadenceMs);
+    // First tick fires after `cadenceMs`; we don't optimistically
+    // render an empty progress strip — the result envelope from
+    // the original `runWorkflowDurable` call already covers the
+    // "what just happened" surface.
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pollWorkflowId]);
 
   const runInline = async () => {
     setRunning(true);
@@ -247,6 +326,11 @@ export function WorkflowRunner({ close }: { close: () => void }) {
     if (!advanced) return;
     setRunning(true);
     setResult(null);
+    // Clear any in-flight poll from a prior run. The new poll
+    // starts when the executor returns successfully and we know
+    // the workflowId we should track.
+    setPollWorkflowId(null);
+    setProgress(null);
     try {
       const workflow = JSON.parse(graphJson);
       const response = await window.minimal.runWorkflowDurable({
@@ -255,6 +339,11 @@ export function WorkflowRunner({ close }: { close: () => void }) {
       });
       if (response.kind === "ok") {
         setResult(response as InlineResultOk);
+        // Start polling for the live durable state. The
+        // `useEffect` reads `pollWorkflowId` and calls
+        // `window.minimal.getWorkflowRun(...)` on a fixed cadence
+        // until the run finalizes.
+        setPollWorkflowId(response.result.workflowId);
       } else {
         setResult(response as InlineResultConflict);
       }
@@ -332,9 +421,71 @@ export function WorkflowRunner({ close }: { close: () => void }) {
             Run durable (advanced)
           </button>
         </div>
+        {progress ? <WorkflowProgressView progress={progress} /> : null}
         {result ? <WorkflowResultView result={result} /> : null}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Compact progress strip rendered above the result table after a
+ * **Run durable** completes. Reads `stepStates` from the polled
+ * snapshot — one row per dispatched step with the lifecycle
+ * state. The strip freezes on the final row state when the run
+ * finalizes (`run.status !== "running"`) and the `useEffect`
+ * clears the interval.
+ *
+ * For the typed `WorkflowResult` outputs (audit digest, final
+ * per-step output values) the user reads the `.workflow-result`
+ * region below.
+ */
+function WorkflowProgressView({ progress }: { progress: InlineProgress }) {
+  if (progress.kind === "absent") {
+    return (
+      <section className="workflow-progress" data-testid="workflow-progress" aria-live="polite">
+        <h3>Durable progress</h3>
+        <p className="muted">No durable row yet for <code>{progress.workflowId}</code>; waiting for the executor to start the run.</p>
+      </section>
+    );
+  }
+  // Index the most-recent state per step so a re-dispatch
+  // upserts cleanly. The `stepStates` rows are timestamped
+  // (`updated_at`); we keep the latest by string compare (ISO-8601
+  // is sortable lexicographically).
+  const latestByStep = new Map<string, InlineProgressPresent["stepStates"][number]>();
+  for (const row of progress.stepStates) {
+    const prev = latestByStep.get(row.step_id);
+    if (!prev || row.updated_at > prev.updated_at) {
+      latestByStep.set(row.step_id, row);
+    }
+  }
+  const ordered = Array.from(latestByStep.values()).sort((a, b) =>
+    a.step_id.localeCompare(b.step_id)
+  );
+  return (
+    <section className="workflow-progress" data-testid="workflow-progress" aria-live="polite">
+      <h3>
+        <span>Durable progress</span>
+        <span className="workflow-result-id">{progress.run.workflow_id}</span>
+      </h3>
+      <p className="workflow-result-meta">
+        status <code>{progress.run.status}</code>
+      </p>
+      {ordered.length === 0 ? (
+        <p className="muted">No step states recorded yet.</p>
+      ) : (
+        <ul className="workflow-progress-list">
+          {ordered.map((row) => (
+            <li key={row.step_id} className={`workflow-progress-item state-${row.state}`}>
+              <span className={`workflow-progress-dot state-${row.state}`} aria-hidden="true" />
+              <code className="workflow-progress-step">{row.step_id}</code>
+              <span className="workflow-progress-state">{row.state}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

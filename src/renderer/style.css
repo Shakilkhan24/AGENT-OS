@@ -1600,3 +1600,59 @@ h2 {
   font-size: 11px;
   color: #f3d2d2;
 }
+
+/* M6.4 — live durable-runner progress strip. Renders after
+   **Run durable** completes. One row per dispatched step with a
+   coloured dot that maps to the lifecycle state the
+   `workflow_step_state` row carries. */
+.workflow-progress {
+  border: 1px solid #35536c;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #18242c;
+  margin-bottom: 10px;
+}
+.workflow-progress h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #a6cef3;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.workflow-progress-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.workflow-progress-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-family: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.workflow-progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.workflow-progress-dot.state-running { background: #f3c66c; }
+.workflow-progress-dot.state-waiting { background: #6c9bf3; }
+.workflow-progress-dot.state-completed { background: #6cf38c; }
+.workflow-progress-dot.state-failed { background: #f36c6c; }
+.workflow-progress-dot.state-cancelled { background: #9a9a9a; }
+.workflow-progress-step { color: #cfe2f3; }
+.workflow-progress-state {
+  margin-left: auto;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 10px;
+  color: #a6cef3;
+}

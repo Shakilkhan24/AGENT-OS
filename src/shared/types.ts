@@ -12,6 +12,8 @@ import type {
   WorkflowGraphInput,
   WorkflowResult,
   WorkflowExecutorSettingsInput,
+  WorkflowRunSnapshot,
+  GetWorkflowRunInput,
 } from "./workflow-executor-schema";
 // M7.7 — the API surface's attention-kind enum mirrors the wire
 // result schema (transitionAttentionResultSchema) so the renderer
@@ -339,6 +341,13 @@ export interface API {
     | { kind: "ok"; result: WorkflowResult }
     | { kind: "conflict"; reason: string }
   >;
+  // M6.4 — live workflow-run snapshot. Read-side IPC used by the
+  // renderer's polling seam. Returns a typed `WorkflowRunSnapshot`
+  // discriminated on `kind` ("absent" | "present"); the renderer
+  // reads `stepStates` for the progress strip and `stepOutputs`
+  // for per-step output previews. No envelope — matches
+  // `view-session-memory` style.
+  getWorkflowRun(input: GetWorkflowRunInput): Promise<WorkflowRunSnapshot>;
 }
 declare global {
   interface Window {

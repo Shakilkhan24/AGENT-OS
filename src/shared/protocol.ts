@@ -38,6 +38,8 @@ import {
 import {
   runWorkflowInputSchema,
   workflowResultSchema,
+  getWorkflowRunInputSchema,
+  workflowRunSnapshotSchema,
 } from "./workflow-executor-schema";
 import {
   upsertScheduleInputSchema,
@@ -180,6 +182,14 @@ export const methods = {
   // so the run survives a restart. Returns the same
   // `WorkflowResult` envelope (typed).
   "run-workflow-durable": method(z.tuple([runWorkflowInputSchema]), z.unknown(), MAX_DEADLINE_MS),
+  // M6.4 — live workflow-run snapshot. Read-side IPC used by the
+  // renderer's polling seam (`WorkflowRunner.tsx` polls on a
+  // fixed cadence after a durable run starts). Returns either
+  // `{kind:"absent", workflowId}` (no row yet) or
+  // `{kind:"present", run, stepOutputs, stepStates}` — see
+  // `workflowRunSnapshotSchema`. No envelope (matches
+  // `view-session-memory`); 5s timeout (matches `view-*` reads).
+  "get-workflow-run": method(z.tuple([getWorkflowRunInputSchema]), z.unknown(), 5000),
   // M7 — schedule management. Every handler runs the input through
   // the dispatcher's Zod parse, so a malformed wire value fails the
   // IPC boundary instead of leaking into the dispatcher. The
@@ -280,6 +290,16 @@ export function parseResult<M extends Method>(method: M, args: InputArgs<M>, val
     const envelope = runWorkflowEnvelopeSchema.parse(result);
     if (envelope.kind === "ok") workflowResultSchema.parse(envelope.result);
     return envelope as Result<M>;
+  }
+  if (method === "get-workflow-run") {
+    // The dispatcher returns a typed `WorkflowRunSnapshot`
+    // (see `workflowRunSnapshotSchema`). Re-parse here so a
+    // malformed wire value fails the strict Zod schema instead
+    // of silently passing through `z.unknown()`. The renderer
+    // only handles two shapes: `kind:"absent"` (no row yet,
+    // usually the very first tick after dispatch) and
+    // `kind:"present"` with the row + per-step arrays.
+    return workflowRunSnapshotSchema.parse(result) as Result<M>;
   }
   if (method === "upsert-schedule" || method === "publish-schedule-revision"
       || method === "promote-schedule-revision" || method === "set-schedule-status"
