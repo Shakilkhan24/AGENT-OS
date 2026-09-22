@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   Check,
@@ -6,6 +6,7 @@ import {
   Command,
   Folder,
   FolderOpen,
+  HelpCircle,
   Layers2,
   PanelRightClose,
   PanelRightOpen,
@@ -22,6 +23,10 @@ import { FilePanel } from "./FilePanel";
 import { TerminalTabs } from "./TerminalTabs";
 import { LaunchDialog } from "./LaunchDialog";
 import { useWorkspace } from "./useWorkspace";
+import { useGlobalShortcuts } from "./useGlobalShortcuts";
+import { KeyboardCheatsheet } from "./KeyboardCheatsheet";
+import { CommandPalette, type PaletteAction } from "./CommandPalette";
+import type { PaletteCommand } from "./command-logic";
 const Terminal = lazy(() =>
   import("./Terminal").then((module) => ({ default: module.Terminal })),
 );
@@ -29,6 +34,7 @@ import { SessionSidebar } from "./SessionSidebar";
 import { WorkspaceDialog, type Dialog } from "./WorkspaceDialog";
 import { ManagedReview } from "./ManagedReview";
 import { AttentionInbox } from "./AttentionInbox";
+import { isAdvancedEnabled } from "./AdvancedControls";
 export function App() {
   const [sessionId, setSessionId] = useState(
     localStorage.getItem("minimal.session") || "",
@@ -63,6 +69,28 @@ export function App() {
   // M3c.3 — persistent attention inbox panel. Visibility is local state
   // (no auto-open on background activity; background never steals focus).
   const [inboxOpen, setInboxOpen] = useState(false);
+  // M9.3 — M5.6's command-palette and the new keyboard cheatsheet dialogs.
+  // We piggy-back on the existing `dialog` slot (Dialog union) so the
+  // open/close + focus restoration stay in one place. `cheatsheet` and
+  // `palette` are NOT routed through WorkspaceDialog — they render their
+  // own components below.
+  const [recentCommandIds, setRecentCommandIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("minimal.recent-commands");
+      if (!raw) return [];
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+  const pushRecent = useCallback((id: string) => {
+    setRecentCommandIds((prev) => {
+      const next = [id, ...prev.filter((value) => value !== id)].slice(0, 5);
+      localStorage.setItem("minimal.recent-commands", JSON.stringify(next));
+      return next;
+    });
+  }, []);
   const [launchInitial, setLaunchInitial] = useState<LaunchRequest>({
     command: "",
   });
@@ -213,6 +241,117 @@ export function App() {
     setError("");
     setDialog("launch");
   };
+  // M9.3 — palette command table. Kept as a memo so the renderer doesn't
+  // re-allocate the command list on every keystroke. `run` callbacks read
+  // the latest state via the closure; the hook rebuilds when session/mode
+  // change.
+  const paletteCommands = useMemo<readonly PaletteAction[]>(() => {
+    const list: PaletteAction[] = [
+      {
+        command: { id: "session.new", label: "New session", aliases: ["create"], scope: "global" },
+        run: () => openDialog("create"),
+      },
+      {
+        command: { id: "session.rename", label: "Rename session", scope: "session" },
+        run: () => openDialog("rename"),
+      },
+      {
+        command: { id: "session.delete", label: "Delete session", scope: "session" },
+        run: () => openDialog("delete"),
+      },
+      {
+        command: { id: "terminal.launch", label: "Launch terminals", scope: "session" },
+        run: () => openDialog("launch"),
+      },
+      {
+        command: { id: "terminal.rename", label: "Rename terminal", scope: "terminal" },
+        run: () => openDialog("terminal-name"),
+      },
+      {
+        command: { id: "presets.edit", label: "Edit launch presets", scope: "global" },
+        run: () => openDialog("presets"),
+      },
+      {
+        command: { id: "help.show", label: "How it works", scope: "global" },
+        run: () => openDialog("help"),
+      },
+      {
+        command: { id: "cheatsheet.show", label: "Keyboard shortcuts", scope: "global" },
+        run: () => setDialog("cheatsheet"),
+      },
+      {
+        command: { id: "managed.toggle", label: "Toggle managed review", scope: "session" },
+        run: () => setManagedMode((value) => {
+          const next = !value;
+          localStorage.setItem("minimal.managed", next ? "on" : "off");
+          return next;
+        }),
+      },
+      {
+        command: { id: "explorer.toggle", label: "Toggle file explorer", scope: "session" },
+        run: () => setExplorerVisible((value) => {
+          localStorage.setItem("minimal.explorer", value ? "hidden" : "visible");
+          return !value;
+        }),
+      },
+      {
+        command: { id: "inbox.toggle", label: "Open attention inbox", scope: "session" },
+        run: () => setInboxOpen((value) => !value),
+      },
+      {
+        command: { id: "stop.runtime", label: "Stop the runtime", scope: "global" },
+        run: () => void stopRuntime(),
+      },
+    ];
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, terminal?.id]);
+  const runPaletteCommand = useCallback((command: PaletteCommand) => {
+    const action = paletteCommands.find((a) => a.command.id === command.id);
+    if (!action) return;
+    pushRecent(command.id);
+    action.run();
+  }, [paletteCommands, pushRecent]);
+  // M9.3 — global hotkey wiring. `?` opens the cheatsheet; the others are
+  // wired to the existing dialog/sidebar state. Cycle-focus walks the
+  // three focusable chrome areas in the order: sidebar / managed review →
+  // terminal panel → inbox badge → back.
+  const focusableSelectors = [
+    ".sidebar .session-card",
+    ".managed-review .managed-list, .managed-review .managed-detail",
+    ".terminal-panel",
+    ".inbox-button",
+  ];
+  const cycleFocus = useCallback((direction: "up" | "down") => {
+    const all = focusableSelectors
+      .flatMap((sel) => Array.from(document.querySelectorAll<HTMLElement>(sel)))
+      .filter((el) => !el.hasAttribute("disabled") && el.tabIndex !== -1);
+    if (all.length === 0) return;
+    const current = document.activeElement as HTMLElement | null;
+    const index = current ? all.indexOf(current) : -1;
+    const next = direction === "down"
+      ? (index + 1) % all.length
+      : (index - 1 + all.length) % all.length;
+    all[next]?.focus();
+  }, []);
+  useGlobalShortcuts({
+    onPalette: () => setDialog((current) => (current === "palette" ? undefined : "palette")),
+    onSplitter: () => {
+      // M9.3 follow-up (commit 3): toggle is gated behind the advanced flag.
+      const advanced = localStorage.getItem("minimal.advanced") === "on";
+      if (!advanced) {
+        setError("Enable Advanced controls to toggle managed review.");
+        return;
+      }
+      setManagedMode((value) => {
+        const next = !value;
+        localStorage.setItem("minimal.managed", next ? "on" : "off");
+        return next;
+      });
+    },
+    onFocusCycle: cycleFocus,
+    onCheatsheet: () => setDialog((current) => (current === "cheatsheet" ? undefined : "cheatsheet")),
+  });
   const closeTerminal = async (targetSession: string, terminalId: string) => {
     if (closingRef.current.has(terminalId)) return;
     closingRef.current.add(terminalId);
@@ -262,7 +401,17 @@ export function App() {
             <strong>{session?.name || "Overview"}</strong>
           </div>
           <div className="topbar-actions">
-            <span className="running-pill">
+            <span
+              className="running-pill"
+              // M9.3: the dot is colour-only; the explicit aria-label keeps the
+              // status legible when a screen reader announces the topbar.
+              aria-label={
+                snapshot.engineError
+                  ? "Runtime status unavailable"
+                  : `${running} terminal${running === 1 ? "" : "s"} running`
+              }
+              role="status"
+            >
               <span className={`dot ${snapshot.engineError ? "" : "live"}`} />
               {snapshot.engineError ? "Status unavailable" : `${running} running`}
             </span>
@@ -286,6 +435,18 @@ export function App() {
                 </span>
               </button>
             ) : null}
+            {/* M9.3 — keyboard cheatsheet. The `?` global hotkey opens the
+                same dialog, but a visible button keeps the affordance
+                discoverable without a keyboard. */}
+            <button
+              className="icon-button"
+              aria-label="Keyboard shortcuts"
+              aria-keyshortcuts="?"
+              title="Keyboard shortcuts (press ?)"
+              onClick={() => setDialog((current) => (current === "cheatsheet" ? undefined : "cheatsheet"))}
+            >
+              <HelpCircle size={17} />
+            </button>
             {/* M1.6: closing the window keeps the runtime alive. This is the only
                 in-app affordance to actually terminate it. */}
             <button
@@ -345,22 +506,41 @@ export function App() {
               <div className="session-actions">
                 <button
                   className={`icon-button ${managedMode ? "active" : ""}`}
-                  aria-label={managedMode ? "Hide managed review" : "Show managed review"}
+                  aria-label={
+                    managedMode
+                      ? "Hide managed review"
+                      : isAdvancedEnabled()
+                        ? "Show managed review"
+                        : "Show managed review (Advanced)"
+                  }
                   aria-pressed={managedMode}
+                  aria-describedby={isAdvancedEnabled() ? undefined : "managed-advanced-hint"}
+                  disabled={!isAdvancedEnabled() && !managedMode}
                   title={
                     managedMode
                       ? "Switch back to the session sidebar"
-                      : "Open the managed work review shell (M3c)"
+                      : isAdvancedEnabled()
+                        ? "Open the managed work review shell (M3c)"
+                        : "Enable Advanced controls to unlock Managed review"
                   }
-                  onClick={() =>
+                  onClick={() => {
+                    if (!isAdvancedEnabled() && !managedMode) {
+                      setError("Enable Advanced controls (Presets dialog \u2192 Advanced controls) to use Managed review.");
+                      return;
+                    }
                     setManagedMode((value) => {
                       const next = !value;
                       localStorage.setItem("minimal.managed", next ? "on" : "off");
                       return next;
-                    })
-                  }
+                    });
+                  }}
                 >
                   <Layers2 size={17} />
+                  {!isAdvancedEnabled() && !managedMode ? (
+                    <span className="advanced-badge" aria-hidden="true">
+                      Adv
+                    </span>
+                  ) : null}
                 </button>
                 <button
                   className="icon-button"
@@ -549,7 +729,7 @@ export function App() {
             LOCAL FIRST<span className="footer-separator">/</span>BUILT FOR
             FOCUS
           </span>
-          <span>
+          <span aria-label={`Application version ${version}`}>
             {session
               ? `${session.terminals.length} terminals in this session`
               : "A quieter way to manage your work"}
@@ -567,11 +747,27 @@ export function App() {
           launch={launch}
         />
       )}
-      {dialog && dialog !== "launch" && (
+      {dialog && dialog !== "launch" && dialog !== "cheatsheet" && dialog !== "palette" && (
         <WorkspaceDialog dialog={dialog} busy={busy} error={error} close={() => setDialog(undefined)}
           submit={submit} sessionName={session?.name} terminalLabel={terminal?.label}
           directory={directory} setDirectory={setDirectory} draftPresets={draftPresets}
           setDraftPresets={setDraftPresets} report={report} />
+      )}
+      {/* M9.3 — keyboard cheatsheet dialog. */}
+      {dialog === "cheatsheet" && (
+        <KeyboardCheatsheet close={() => setDialog(undefined)} />
+      )}
+      {/* M9.3 — command palette dialog. The matching algorithm is the
+          pure helper in `command-logic.ts` (M5.6). */}
+      {dialog === "palette" && (
+        <CommandPalette
+          commands={paletteCommands}
+          recentIds={recentCommandIds}
+          runCommand={runPaletteCommand}
+          close={() => setDialog(undefined)}
+          sessionFocused={Boolean(session)}
+          terminalFocused={Boolean(terminal)}
+        />
       )}
       {/* M3c.3 — slide-in attention inbox panel. Renders nothing when
           closed OR when the projection is unavailable / empty. */}

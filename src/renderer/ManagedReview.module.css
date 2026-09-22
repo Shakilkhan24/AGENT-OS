@@ -63,6 +63,15 @@
   min-height: 0;
   outline: none;
 }
+/* M9.3: the columns visually own the keyboard focus ring so a screen-reader
+   or keyboard-only user can see which pane is active. */
+.managed-list:focus-visible,
+.managed-detail:focus-visible,
+.managed-stream:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
 
 .managed-list {
   border-right: 1px solid #2a302c;
@@ -679,6 +688,12 @@
   border-color: #4f7a4f;
   box-shadow: 0 0 0 1px #2d4f2d inset;
 }
+/* M9.3: keyboard-only focus is visually distinct from the mouse-only :focus rule
+   so a screen reader or keyboard-only user sees an explicit ring. */
+.managed-prompt-editor .managed-prompt-textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .managed-prompt-footer {
   display: flex;
   align-items: center;
@@ -709,6 +724,12 @@
   outline: none;
   border-color: #4f7a4f;
   box-shadow: 0 0 0 1px #2d4f2d inset;
+}
+/* M9.3: keyboard-only focus ring for the action input. Mouse clicks keep
+   the colour-only :focus rule so the form doesn't flicker on click. */
+.managed-action-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .managed-button-answer {
   background: #2d3a2d;

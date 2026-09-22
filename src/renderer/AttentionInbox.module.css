@@ -139,6 +139,18 @@
   letter-spacing: 0.05em;
   font-weight: 700;
 }
+/* M9.3: each state carries a leading glyph so the chip's status isn't
+   colour-only. The glyphs are deliberately distinct ASCII / unicode marks
+   so they survive `forced-colors: active` (where the colours collapse). */
+.attention-inbox-state::before {
+  margin-right: 4px;
+  font-weight: 700;
+}
+.attention-inbox-state-new::before { content: "+"; color: #f0bfbf; }
+.attention-inbox-state-seen::before { content: "\2713"; color: #b9e0c4; }
+.attention-inbox-state-snoozed::before { content: "\263E"; color: #c9bcf0; }
+.attention-inbox-state-dismissed::before { content: "\2212"; color: #95a08f; }
+.attention-inbox-state-resolved::before { content: "\25CB"; color: #6f8576; }
 .attention-inbox-state-new { color: #f0bfbf; }
 .attention-inbox-state-seen { color: #b9e0c4; }
 .attention-inbox-state-snoozed { color: #c9bcf0; }

@@ -103,10 +103,10 @@ test("an acknowledged Unicode draft survives SIGKILL and restores as unsaved", a
   } finally { await ctx.close(); }
 });
 
-// M9.3 — a11y attribute assertions on the terminal host. The actual
-// screen-reader reading behaviour is qualified manually and recorded
-// in `docs/screen-reader-qualification.md`; this test is the headless
-// DOM contract for the terminal-host attributes.
+// M9.3 — a11y attribute assertions on the terminal host and status pill.
+// The actual screen-reader reading behaviour is qualified manually and
+// recorded in `docs/screen-reader-qualification.md`; these tests are the
+// headless DOM contract.
 test("terminal host has role=log, aria-live=polite, and an aria-label matching the terminal label", async () => {
   const ctx = await fixture();
   try {
@@ -120,5 +120,37 @@ test("terminal host has role=log, aria-live=polite, and an aria-label matching t
     await expect(surface).toHaveAttribute("aria-live", "polite");
     const label = await surface.getAttribute("aria-label");
     expect(label).toMatch(/^Terminal output for /);
+  } finally { await ctx.close(); }
+});
+
+test("running-pill carries an aria-label so status isn't color-only", async () => {
+  const ctx = await fixture();
+  try {
+    const { page } = ctx;
+    const pill = page.locator(".running-pill");
+    await expect(pill).toBeVisible();
+    const label = await pill.getAttribute("aria-label");
+    expect(label).toMatch(/terminals? running|status/i);
+    // The pill must NOT be colour-only — its dot has a sibling text node.
+    const text = (await pill.textContent())?.trim() ?? "";
+    expect(text.length).toBeGreaterThan(0);
+  } finally { await ctx.close(); }
+});
+
+test("global hotkeys do NOT fire while focus is inside an attached xterm", async () => {
+  const ctx = await fixture();
+  try {
+    const { page } = ctx;
+    await page.evaluate(async () => {
+      const snapshot = await window.minimal.snapshot();
+      await window.minimal.createTerminals(snapshot.sessions[0].id, snapshot.presets[0].id, 1, "");
+    });
+    await expect(page.locator(".terminal-caption")).toContainText("Connected");
+    // Move focus inside xterm — clicking the textarea helper is the most
+    // reliable way to land focus on the xterm sub-tree.
+    await page.locator(".xterm-helper-textarea").first().focus();
+    await page.keyboard.press("Control+Shift+P");
+    // The palette dialog must NOT be open.
+    await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(0);
   } finally { await ctx.close(); }
 });
