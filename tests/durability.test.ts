@@ -4,7 +4,7 @@
  * These tests pin the contract clients rely on:
  *  - concurrent calls inside one debounce window collapse into one write
  *  - the latest scheduled args win
- *  - `flush()` is required to observe writes synchronously
+ *  - saves and event publication resolve after persistence
  *  - `close()` is idempotent and always drains
  *  - failures inside the writer propagate to every coalesced caller
  */
@@ -27,14 +27,15 @@ test("Store.save coalesces a burst into one durable write", async (t) => {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new Store(dir, { debounceMs: 25 });
   await store.load();
-  await store.save({
+  const first = store.save({
     version: 2, sessions: [], envProfiles: [], hooks: [], launches: [],
     presets: [{ id: "00000000-0000-4000-8000-000000000001", name: "S1", command: "" }],
   });
-  await store.save({
+  const second = store.save({
     version: 2, sessions: [], envProfiles: [], hooks: [], launches: [],
     presets: [{ id: "00000000-0000-4000-8000-000000000001", name: "S2", command: "" }],
   });
+  await Promise.all([first, second]);
   await store.flush();
   const onDisk = JSON.parse(await readFile(path.join(dir, "state.json"), "utf8"));
   assert.equal(onDisk.presets[0].name, "S2", "latest args win");
@@ -54,7 +55,7 @@ test("Store.save rejects when the underlying write fails", async (t) => {
     version: 2, sessions: [], envProfiles: [], hooks: [], launches: [],
     presets: [],
   }));
-  await store.close();
+  await assert.rejects(store.close());
 });
 
 test("Store.close drains pending writes before resolving", async (t) => {
@@ -62,22 +63,22 @@ test("Store.close drains pending writes before resolving", async (t) => {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new Store(dir, { debounceMs: 100 });
   await store.load();
-  await store.save({
+  const pending = store.save({
     version: 2, sessions: [], envProfiles: [], hooks: [], launches: [],
     presets: [{ id: "00000000-0000-4000-8000-000000000001", name: "Settled", command: "" }],
   });
   await store.close();
+  await pending;
   const onDisk = JSON.parse(await readFile(path.join(dir, "state.json"), "utf8"));
   assert.equal(onDisk.presets[0].name, "Settled");
 });
 
-test("EventBus.publishMany coalesces journal writes within the debounce window", async (t) => {
+test("EventBus publishes concurrent requests durably in sequence", async (t) => {
   const dir = await tmp("bus-debounce");
   t.after(() => rm(dir, { recursive: true, force: true }));
   const bus = new EventBus(dir, 100);
   await bus.initialize();
-  // A burst of 10 publishes all resolve immediately (subscribers fire synchronously
-  // inside the mutex) but only one journal write occurs.
+  // Every successful publication is durable and uses a unique sequence.
   const seqs = await Promise.all(Array.from({ length: 10 }, (_, i) =>
     bus.publish({ type: "engine-restored", sourceId: `s${i}`, data: {} })));
   assert.deepEqual(seqs.map((e) => e.seq), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -88,7 +89,7 @@ test("EventBus.publishMany coalesces journal writes within the debounce window",
   await reopened.close();
 });
 
-test("EventBus subscribers see events in seq order even when journal is debounced", async (t) => {
+test("EventBus subscribers see durable events in sequence order", async (t) => {
   const dir = await tmp("bus-order");
   t.after(() => rm(dir, { recursive: true, force: true }));
   const bus = new EventBus(dir, 100);

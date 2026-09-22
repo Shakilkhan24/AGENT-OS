@@ -9,28 +9,29 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { fileActionSchema } from "../shared/files";
-import { Store } from "./store";
-import { TmuxEngine, type Attachment } from "./engine";
-import { SessionFilesystem } from "./filesystem";
-import { SessionService } from "./service";
 import { Logger, configureLogging, log } from "./logging";
-import { SettingsStore } from "./settings-store";
-import { DraftStore } from "./draft-store";
 import { runWithWatchdog } from "./shutdown";
+import { ProtocolDispatcher } from "./protocol-dispatcher";
+import { profilePaths } from "./profile-runtime";
+import { ControlClient } from "../runtime/control-client";
+import { AppError } from "../shared/errors";
+import { API_VERSION, methods, parseSignal, parseResult, type Method, type RequestArgs, type Result, type InvocationContext } from "../shared/protocol";
+import { launchRuntime, resolveRuntimePaths, type RuntimeHandle } from "./runtime-launcher";
+import { probeCompatibility } from "../release/compatibility-check";
 
 if (process.env.MINIMAL_DATA_DIR)
   app.setPath("userData", path.resolve(process.env.MINIMAL_DATA_DIR));
 app.setName("MINIMAL");
 const locked = app.requestSingleInstanceLock();
 let window: BrowserWindow | undefined;
-let filesystem: SessionFilesystem | undefined;
-let workspace: SessionService | undefined;
-let attachment: Attachment | undefined;
-let attachmentGeneration = 0;
+let client: ControlClient | undefined;
+let runtime: RuntimeHandle | undefined;
+let runtimeStarted = false;
+let quitRequested = false;
+const pendingRequests = new Set<Promise<unknown>>();
+const protocol = new ProtocolDispatcher();
 const detach = () => {
-  attachment?.close();
-  attachment = undefined;
+  client?.close();
 };
 if (!locked) app.quit();
 else {
@@ -41,40 +42,71 @@ else {
   app
     .whenReady()
     .then(async () => {
+      // M9.3: wire up the Linux/WSLg AT-SPI bridge so assistive technologies
+      // (Orca, NVDA via WSLg) can reach the renderer. No-op on platforms
+      // without an a11y bus. Kept before any BrowserWindow construction so
+      // the bridge is alive for the first render.
+      app.setAccessibilitySupportEnabled(true);
       const location = path.join(__dirname, "../renderer/index.html");
       const rendererUrl = pathToFileURL(location).href;
       const directory = app.getPath("userData");
+      // The runtime owns its own logging (it sees workspace settings on open); the
+      // desktop logger simply captures startup, IPC and shutdown lines.
       configureLogging(new Logger(path.join(directory, "logs")));
-      const settings = await new SettingsStore(directory).load();
-      const drafts = new DraftStore(directory, settings.draftLimit);
-      configureLogging(
-        new Logger(path.join(directory, "logs"), settings.logRetentionDays),
-      );
-      log({
-        level: "info",
-        source: "application",
-        event: "started",
-        fields: { version: app.getVersion() },
+      // M9.4: probe host compatibility at startup. The probe result
+      // is logged as an operational record so a reviewer can audit
+      // it post-hoc; a probe failure never blocks startup.
+      try {
+        const probe = await probeCompatibility();
+        log({
+          level: probe.supported ? "info" : "warning",
+          source: "diagnostics",
+          event: "compatibility-probe",
+          fields: {
+            architecture: probe.architecture,
+            runtime: probe.runtime,
+            filesystem: probe.filesystem,
+            distro: probe.distro,
+            providers: probe.providers,
+            sqliteAvailable: probe.sqliteAvailable,
+            rootlessContainerEngine: probe.rootlessContainerEngine,
+            supported: probe.supported,
+            unsupportedReasons: probe.unsupportedReasons,
+          },
+        });
+      } catch (error) {
+        log({
+          level: "warning",
+          source: "diagnostics",
+          event: "compatibility-probe-failed",
+          fields: {
+            kind: error instanceof Error ? error.name : "unknown",
+          },
+        });
+      }
+      const helpersDir = path.join(__dirname, "../helpers");
+      const paths = profilePaths(directory);
+      const resolved = resolveRuntimePaths(helpersDir, path.join(__dirname, ".."));
+      // M1.3+M1.4: the runtime is a separate, OS-locked Node-mode Electron process
+      // gated on the per-profile lock inode. `client.ready` blocks until the
+      // welcome round-trip succeeds, so subsequent IPC calls cannot precede auth.
+      runtime = await launchRuntime({
+        dataDir: directory,
+        helpersDir,
+        executable: resolved.executable,
+        runtimeEntry: resolved.runtimeEntry,
+        runtimeDir: paths.runtime,
+        socketPath: paths.socket,
+        lockPath: paths.lock,
       });
-      filesystem = new SessionFilesystem(
-        path.join(__dirname, "../helpers/filesystem.py"),
-        settings,
-      );
-      const engine = new TmuxEngine(
-        directory,
-        path.join(__dirname, "../helpers/pty_bridge.py"),
-        settings,
-      );
-      const store = new Store(directory);
-      const service = new SessionService(
-        store,
-        engine,
-        filesystem,
-        settings,
-      );
-      await service.initialize();
-      workspace = service;
-      service.start();
+      runtimeStarted = true;
+      client = new ControlClient(paths.socket,
+        { profileKey: paths.key, token: runtime.token },
+        message => { if (window && !window.isDestroyed()) window.webContents.send(message.name, message.envelope); });
+      await client.ready;
+      log({ level: "info", source: "application", event: "started", fields: {
+        version: app.getVersion(), mode: "runtime-child", pid: runtime.pid, incarnation: runtime.incarnation,
+      } });
       electronSession.defaultSession.setPermissionRequestHandler(
         (_contents, _permission, callback) => callback(false),
       );
@@ -91,24 +123,25 @@ else {
           throw new Error("Untrusted IPC sender");
       };
       const id = z.string().uuid();
-      const dimensions = (cols: unknown, rows: unknown) => [
-        z.number().int().min(2).max(500).parse(cols),
-        z.number().int().min(2).max(250).parse(rows),
-      ];
-      const handle = (channel: string, callback: (...args: any[]) => any) =>
-        ipcMain.handle(channel, (event, ...args) => {
+      const wire = <M extends Method>(channel: M, callback: (args: RequestArgs<M>, context: InvocationContext) => Result<M> | Promise<Result<M>>) => {
+        protocol.register(channel, callback);
+        ipcMain.handle(channel, (event, request: unknown) => {
           trusted(event);
-          return callback(...args);
+          const pending = protocol.dispatch(channel, request);
+          pendingRequests.add(pending);
+          return pending.finally(() => pendingRequests.delete(pending));
         });
-      handle("snapshot", () => service.snapshot());
-      handle("get-settings", () => settings);
-      handle("list-drafts", () => drafts.list());
-      handle("read-draft", draftId => drafts.read(draftId));
-      handle("save-draft", input => {
-        service.state.session(input.sessionId);
-        return drafts.save(input);
+      };
+      const handle = <M extends Method>(channel: M, callback: (...args: RequestArgs<M>) => Result<M> | Promise<Result<M>>) => wire(channel, args => callback(...args));
+      ipcMain.on("cancel-request", (event, value: unknown) => {
+        try {
+          trusted(event);
+          const cancellation = z.object({ apiVersion: z.literal(API_VERSION), id }).strict().parse(value);
+          protocol.cancel(cancellation.id);
+        } catch {
+          log({ level: "warning", source: "protocol", event: "cancellation-rejected" });
+        }
       });
-      handle("remove-draft", draftId => drafts.remove(draftId));
       handle("read-clipboard", () => clipboard.readText());
       handle("write-clipboard", (text) =>
         clipboard.writeText(
@@ -125,112 +158,40 @@ else {
         });
         return result.canceled ? null : result.filePaths[0];
       });
-      handle("create-session", (name, directory) =>
-        service.createSession(name, directory),
-      );
-      handle("rename-session", (sessionId, name) =>
-        service.renameSession(id.parse(sessionId), name),
-      );
-      handle("delete-session", (sessionId) =>
-        service.deleteSession(id.parse(sessionId)),
-      );
-      handle("create-terminals", (sessionId, presetId, count, cwd) =>
-        service.createTerminals(
-          id.parse(sessionId),
-          id.parse(presetId),
-          count,
-          cwd,
-        ),
-      );
-      handle("launch-terminals", (sessionId, request) =>
-        service.launchTerminals(id.parse(sessionId), request),
-      );
-      handle("rename-terminal", (sessionId, terminalId, label) =>
-        service.renameTerminal(
-          id.parse(sessionId),
-          id.parse(terminalId),
-          label,
-        ),
-      );
-      handle("delete-terminal", (sessionId, terminalId) =>
-        service.deleteTerminal(id.parse(sessionId), id.parse(terminalId)),
-      );
-      handle("save-presets", (presets) => service.savePresets(presets));
-      handle("files", (sessionId, request) =>
-        service.files(id.parse(sessionId), fileActionSchema.parse(request)),
-      );
-      handle("attach", async (terminalId, cols, rows) => {
-        const generation = ++attachmentGeneration;
-        terminalId = id.parse(terminalId);
-        const [c, r] = dimensions(cols, rows);
-        await service.requireTerminal(terminalId);
-        if (generation !== attachmentGeneration)
-          throw new Error("Terminal selection changed");
-        detach();
-        attachment = engine.attach(
-          terminalId,
-          c,
-          r,
-          (token, data) => {
-            if (!window?.isDestroyed())
-              window?.webContents.send("terminal-output", token, data);
-          },
-          (token) => {
-            if (!window?.isDestroyed())
-              window?.webContents.send("terminal-exit", token);
-          },
-        );
-        return attachment.token;
-      });
-      handle("detach", (token) => {
-        if (attachment?.token === id.parse(token)) detach();
-      });
-      ipcMain.on("input", (event, token, data) => {
-        try {
-          trusted(event);
-          if (attachment?.token !== id.parse(token)) return;
-          attachment.input(z.string().max(65536).parse(data));
-        } catch (error) {
-          log({
-            level: "warning",
-            source: "ipc",
-            event: "message-rejected",
-            fields: {
-              channel: "input",
-              kind: error instanceof Error ? error.name : "unknown",
-            },
-          });
-        }
-      });
-      for (const channel of ["resize", "acknowledge"])
-        ipcMain.on(channel, (event, token, first, second) => {
+      for (const channel of Object.keys(methods) as Method[]) {
+        if (channel === "read-clipboard" || channel === "write-clipboard" || channel === "choose-directory") continue;
+        wire(channel, async (args, context) => {
+          const cancel = () => client!.cancel(context.requestId);
+          context.signal.addEventListener("abort", cancel, { once: true });
+          try {
+            context.signal.throwIfAborted();
+            const response = await client!.dispatch({ apiVersion: API_VERSION, id: context.requestId,
+              correlationId: context.correlationId, deadlineAt: context.deadlineAt, method: channel, args });
+            if (!response.ok) throw new AppError(response.error.code, response.error.message, response.error);
+            return parseResult(channel, args, response.result);
+          } finally { context.signal.removeEventListener("abort", cancel); }
+        });
+      }
+      for (const channel of ["resize", "acknowledge"] as const)
+        ipcMain.on(channel, (event, value: unknown) => {
           try {
             trusted(event);
-            if (attachment?.token !== id.parse(token)) return;
-            if (channel === "resize") {
-              const [c, r] = dimensions(first, second);
-              attachment.resize(c, r);
-            } else
-              attachment.acknowledge(
-                z
-                  .number()
-                  .int()
-                  .min(0)
-                  .max(1024 * 1024)
-                  .parse(first),
-              );
+            const args = parseSignal(channel, value);
+            client!.signal({ type: "signal", name: channel, envelope: { apiVersion: API_VERSION, args } });
           } catch (error) {
-            log({
-              level: "warning",
-              source: "ipc",
-              event: "message-rejected",
-              fields: {
-                channel,
-                kind: error instanceof Error ? error.name : "unknown",
-              },
-            });
+            log({ level: "warning", source: "ipc", event: "message-rejected",
+              fields: { channel, kind: error instanceof Error ? error.name : "unknown" } });
           }
         });
+      // M1.6: explicit user-initiated "stop runtime and quit". Window close and
+      // GUI crash do not invoke this; the runtime keeps running.
+      ipcMain.handle("stop-runtime", (event) => {
+        try { trusted(event); } catch { throw new Error("Untrusted IPC sender"); }
+        if (!runtimeStarted || !runtime) throw new Error("Runtime is not running");
+        stoppingRuntime = true;
+        app.quit();
+        return { accepted: true };
+      });
       window = new BrowserWindow({
         width: 1440,
         height: 920,
@@ -259,23 +220,14 @@ else {
         window = undefined;
       });
       // If `Store.load()` couldn't parse the existing state.json, it
-      // preserves the file and falls back to the empty default. Surface
-      // the reason to the renderer once the window has finished loading.
-      if (store.recoveredFromInvalid) {
-        log({
-          level: "warning",
-          source: "application",
-          event: "state-recovered",
-          fields: { message: store.recoveredFromInvalid },
-        });
-        const message = store.recoveredFromInvalid;
-        window.webContents.once("did-finish-load", () => {
-          window?.webContents.send("startup-recovered", message);
-        });
-      }
+      // backs up the file and falls back to the empty default. The preload
+      // queries the recovery notice after subscribing, avoiding a load race.
       await window.loadFile(location);
     })
     .catch((error) => {
+      // Closing during the initial page load aborts loadFile. A modal startup
+      // error here would interrupt the shutdown already requested by the user.
+      if (quitRequested) return;
       log({
         level: "error",
         source: "application",
@@ -286,27 +238,54 @@ else {
         "MINIMAL could not start",
         String(error.message || error),
       );
+      if (!runtimeStarted) { app.exit(1); return; }
       app.quit();
     });
 }
 let shuttingDown = false;
+let stoppingRuntime = false;
 const SHUTDOWN_FLUSH_BUDGET_MS = 5000;
 app.on("window-all-closed", () => app.quit());
-app.on("will-quit", (event) => {
-  // Flush pending state.json and event-journal writes before the process
-  // exits. Without this the debouncer's window can drop the last mutation.
-  // The watchdog caps the wait — see src/main/shutdown.ts.
-  if (workspace && !shuttingDown) {
+/**
+ * M1.6: "close window" drains pending IPC and acknowledged drafts on the
+ * desktop side, then exits the GUI process. The runtime child is intentionally
+ * left running so tmux work survives across desktop restarts; the next launch
+ * either re-attaches to the existing runtime (per `tryAttachRuntime`) or starts
+ * a fresh one. To terminate the runtime and its durable work the user must
+ * invoke the explicit `stop-runtime` IPC, which sets `stoppingRuntime` so
+ * `flushBeforeQuit` knows to forward SIGTERM.
+ */
+function flushBeforeQuit(event: Electron.Event) {
+  if (runtimeStarted) {
     event.preventDefault();
+    if (shuttingDown) return;
     shuttingDown = true;
     detach();
+    log({ level: "info", source: "application", event: "desktop-shutdown",
+      fields: { mode: stoppingRuntime ? "stop-runtime" : "window-closed" } });
     const watchdog = runWithWatchdog(async () => {
-      await filesystem?.close();
-      await workspace!.close();
+      const pending = await Promise.allSettled([client!.dispatch({
+        apiVersion: API_VERSION, id: crypto.randomUUID(), correlationId: crypto.randomUUID(),
+        deadlineAt: Date.now() + 1000, method: "snapshot", args: [],
+      }).catch(() => null), protocol.close(), ...pendingRequests]);
+      client!.close();
+      // Only the explicit "stop runtime" path signals the child. A window close
+      // (or a desktop crash) leaves the OS-locked runtime serving this profile.
+      if (stoppingRuntime) await runtime!.stop("SIGTERM", SHUTDOWN_FLUSH_BUDGET_MS);
+      const failure = pending.find(result => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
     }, {
       budgetMs: SHUTDOWN_FLUSH_BUDGET_MS,
       onTimeout: () => app.exit(1),
     });
-    watchdog.done.then(() => app.exit(0));
+    watchdog.done.then(outcome => app.exit(outcome === "completed" ? 0 : 1));
   }
+}
+
+app.on("before-quit", event => {
+  quitRequested = true;
+  // Chromium can block window closure during navigation. Drain directly in
+  // that case; before the initial load there is no editor to flush on unload.
+  if (window?.webContents.isLoadingMainFrame()) flushBeforeQuit(event);
 });
+app.on("will-quit", flushBeforeQuit);

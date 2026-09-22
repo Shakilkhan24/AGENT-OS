@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from "@playwright/test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -257,43 +257,30 @@ test("Hooks seeded in state.json survive a restart and round-trip via snapshot",
   }
 });
 
-test("Malformed hooks in state.json are preserved without being overwritten", async () => {
+test("Malformed state is backed up before editing the recovered workspace", async () => {
   const ctx = await boot();
-  const { data, errors, teardown } = ctx;
+  const { data, root, teardown } = ctx;
   try {
-    // Inject a hook whose `event` is not a known domain event and whose
-    // `action` lacks the required discriminator fields. The state schema
-    // must reject it on load. The file must remain on disk unchanged so
-    // the user can fix it manually.
-    await seedState(data, (state) => {
-      (state as { hooks: unknown[] }).hooks.push({
-        id: randomUUID(),
-        name: "Bad hook",
-        enabled: true,
-        event: "definitely-not-a-real-event",
-        action: { type: "wrong-type" },
-      });
+    await ctx.app.close();
+    await seedState(data, state => {
+      (state as { hooks: unknown[] }).hooks.push({ id: randomUUID(), event: "invalid" });
     });
     const original = await readFile(path.join(data, "state.json"), "utf8");
-    await ctx.app.close();
     const app2 = await launch(data);
-    // Kill the child process immediately because `dialog.showErrorBox`
-    // blocks waiting for user dismissal in a real GUI. We don't need the
-    // Electron app to exit cleanly — only to confirm the state file is
-    // preserved on disk.
-    app2.process().kill("SIGKILL");
     try {
-      // Wait briefly for the main process to attempt loading the state.
-      await new Promise((r) => setTimeout(r, 2000));
-      const after = await readFile(path.join(data, "state.json"), "utf8");
-      expect(after).toBe(original);
-      expect(errors).toEqual([]);
-    } finally {
-      await app2.close().catch(() => {});
-    }
-  } finally {
-    await teardown();
-  }
+      const page = await app2.firstWindow();
+      await expect(page.getByRole("alert")).toContainText("Recovery copy:");
+      await page.evaluate(async root => {
+        await window.minimal.createSession("Recovered workspace", root);
+      }, root);
+      const names = await readdir(data);
+      const backup = names.find(name => name.startsWith("state.recovery-"));
+      expect(backup).toBeTruthy();
+      expect(await readFile(path.join(data, backup!), "utf8")).toBe(original);
+      const current = JSON.parse(await readFile(path.join(data, "state.json"), "utf8"));
+      expect(current.sessions[0].name).toBe("Recovered workspace");
+    } finally { await app2.close(); }
+  } finally { await teardown(); }
 });
 
 test("Launching more than 32 terminals at once surfaces a per-launch error", async () => {

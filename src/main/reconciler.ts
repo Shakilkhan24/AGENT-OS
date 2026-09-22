@@ -10,10 +10,11 @@ export class Reconciler {
   private generation = 0;
   private pending?: { generation: number; promise: Promise<void> };
   private processes = new Map<string, ProcessInfo>();
-  private inspectInflight?: Promise<Map<string, ProcessInfo>>;
+  private inspectInflight?: { generation: number; promise: Promise<Map<string, ProcessInfo>> };
   private signatures = new Map<string, string>();
   private failure?: Failure;
   private prompts = new Set<string>();
+  private refreshes = new Set<Promise<void>>();
   constructor(private state: WorkspaceState, private engine: EngineAdapter, private events: EventBus) {}
   invalidate() { this.generation++; }
   prompt(id: string, ready: boolean) { if (ready) this.prompts.add(id); else this.prompts.delete(id); }
@@ -28,9 +29,11 @@ export class Reconciler {
    * on the very next snapshot.
    */
   private inspectCoalesced(): Promise<Map<string, ProcessInfo>> {
-    if (this.inspectInflight) return this.inspectInflight;
-    const promise = this.engine.inspect().finally(() => { this.inspectInflight = undefined; });
-    this.inspectInflight = promise;
+    if (this.inspectInflight?.generation === this.generation) return this.inspectInflight.promise;
+    const promise = this.engine.inspect().finally(() => {
+      if (this.inspectInflight?.promise === promise) this.inspectInflight = undefined;
+    });
+    this.inspectInflight = { generation: this.generation, promise };
     return promise;
   }
   private status(terminal: { id: string; deleting?: boolean; launchState?: string }): TerminalView["status"] {
@@ -90,7 +93,11 @@ export class Reconciler {
     if (!this.pending || this.pending.generation !== this.generation) {
       const pending = { generation: this.generation, promise: this.refresh(this.generation) };
       this.pending = pending;
-      void pending.promise.finally(() => { if (this.pending === pending) this.pending = undefined; }).catch(() => {});
+      this.refreshes.add(pending.promise);
+      void pending.promise.finally(() => {
+        this.refreshes.delete(pending.promise);
+        if (this.pending === pending) this.pending = undefined;
+      }).catch(() => {});
     }
     await this.pending.promise;
     // Use the frozen view for read-only consumers; the snapshot is a fresh
@@ -104,4 +111,5 @@ export class Reconciler {
           exitCode: live?.exitCode ?? terminal.exitCode, exitSignal: live?.exitSignal ?? terminal.exitSignal };
       }) })) };
   }
+  async drain() { await Promise.allSettled(this.refreshes); }
 }

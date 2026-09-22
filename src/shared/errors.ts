@@ -12,6 +12,14 @@ export const failureSchema = z.object({
     "VERSION_MISMATCH",
     "IO_ERROR",
     "INTERNAL",
+    "UNSUPPORTED_RESTRICTION",
+    "LEASE_HELD",
+    "LEASE_UNCERTAIN",
+    "FORBIDDEN",
+    // M9.5 — the pilot's refuse-to-spend gate emits this when a USD cap
+    // is breached. The runtime distinguishes it from `CONFLICT` because
+    // the rejection is on the USD axis, not the resource axis.
+    "BUDGET_EXCEEDED",
   ]),
   message: z.string().max(4096),
   sourceId: z.string().max(200),

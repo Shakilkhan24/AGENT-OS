@@ -34,6 +34,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: List discovered backend and desktop tests
+        run: npm run test:list
+
       - name: Backend tests
         env:
           CI: "1"
@@ -98,9 +101,12 @@ jobs:
         run: npm ci
 
       - name: Build packaged runtime
-        run: npm run package
+        run: xvfb-run --auto-servernum npm run package
 
       - name: Packaged smoke
         env:
           CI: "1"
         run: xvfb-run --auto-servernum npm run test:package
+
+      - name: Packaged headless runtime and storage probe
+        run: npm run test:runtime

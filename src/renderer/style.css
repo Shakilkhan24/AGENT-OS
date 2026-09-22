@@ -17,6 +17,10 @@
   --line: #2a302c;
   --accent: #c5edaa;
   --panel: #181c19;
+  /* M9.3: a single focus-ring token so future code opts in by `box-shadow: var(--focus-ring)`.
+     The literal `outline` declaration still needs to be in place per-component for
+     `forced-colors: active` mode to honour it (box-shadow is suppressed there). */
+  --focus-ring: 0 0 0 2px var(--accent);
 }
 * {
   box-sizing: border-box;
@@ -51,6 +55,16 @@ button:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
+}
+/* M9.3: `:focus-visible` covers mouse clicks (no outline) AND keyboard focus.
+     The double rule (box-shadow + outline) survives `forced-colors: active`. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 input,
 select,
@@ -110,19 +124,19 @@ h2 {
   overflow: hidden;
 }
 .sidebar {
-  width: 256px;
-  min-width: 256px;
+  width: 20rem;
+  min-width: 20rem;
   background: #1a1f1b;
   border-right: 1px solid #303830;
   display: flex;
   flex-direction: column;
 }
 .brand {
-  height: 88px;
+  height: 6.75rem;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 25px;
+  padding: 0 1.9rem;
   font-size: 18px;
   letter-spacing: 3px;
   font-weight: 650;
@@ -200,6 +214,36 @@ h2 {
 .danger-hover:hover:not(:disabled) {
   color: #ef9c92;
   background: #c3645515;
+}
+
+/* M3c.3 — attention inbox badge on the topbar. The host button is a
+   regular `icon-button`; the badge is a small positioned dot. */
+.inbox-button {
+  position: relative;
+  width: auto;
+  padding: 0 8px;
+  gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+}
+.inbox-button.active {
+  background: #b56b3b33;
+  color: #f0c8a0;
+}
+.inbox-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  background: #b56b3b;
+  color: #1a1207;
+  border-radius: 8px;
 }
 .search-box {
   display: flex;
@@ -368,12 +412,12 @@ h2 {
   min-width: 0;
 }
 .topbar {
-  height: 58px;
-  min-height: 58px;
+  height: 4.5rem;
+  min-height: 4.5rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 30px;
+  padding: 0 2.3rem;
   border-bottom: 1px solid #272d28;
   background: #151916;
 }
@@ -403,11 +447,28 @@ h2 {
   padding: 6px 10px;
   background: #25301f;
 }
+.topbar-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.stop-runtime {
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  color: #c9b59b;
+  background: #2a2218;
+  border: 1px solid #4d3d28;
+}
+.stop-runtime:hover:not(:disabled) {
+  background: #332919;
+  border-color: #6c5535;
+}
 .session-header {
-  padding: 28px 30px 26px;
+  padding: 2.15rem 2.3rem 2rem;
   display: flex;
   justify-content: space-between;
-  gap: 20px;
+  gap: 1.5rem;
   align-items: center;
 }
 .eyebrow {
@@ -489,7 +550,7 @@ h2 {
   display: flex;
   flex: 1;
   min-height: 0;
-  margin: 0 24px 22px 30px;
+  margin: 0 1.85rem 1.7rem;
   border: 1px solid #30372f;
   border-radius: 7px;
   overflow: hidden;
@@ -502,14 +563,14 @@ h2 {
   background: #111314;
 }
 .panel-heading {
-  height: 43px;
-  min-height: 43px;
+  height: 3.3rem;
+  min-height: 3.3rem;
   background: #191e19;
   border-bottom: 1px solid #2c332b;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 15px;
+  padding: 0 1.15rem;
   font-size: 9px;
   letter-spacing: 1.2px;
   color: #a3af99;
@@ -713,6 +774,17 @@ h2 {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  border-radius: 4px;
+  outline: 0 solid transparent;
+  outline-offset: 1px;
+  transition: outline-color 0.12s;
+}
+/* M9.3: xterm.js suppresses outlines on its descendants, so the host div
+   needs an explicit ring when it (or any descendant) has focus. The double
+   rule (box-shadow + outline) survives `forced-colors: active`. */
+.terminal-surface:focus-within {
+  outline: 2px solid var(--accent);
+  box-shadow: var(--focus-ring);
 }
 .terminal-surface .xterm {
   height: 100%;
@@ -797,8 +869,8 @@ h2 {
   margin-top: 17px;
 }
 .files-panel {
-  width: 264px;
-  min-width: 220px;
+  width: 20rem;
+  min-width: 17rem;
   max-width: 29%;
   border-left: 1px solid #30372f;
   display: flex;
@@ -932,12 +1004,12 @@ h2 {
   background: #24301f;
 }
 .app-footer {
-  min-height: 33px;
+  min-height: 2.5rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
   border-top: 1px solid #252e22;
-  padding: 0 26px;
+  padding: 0 2rem;
   color: #65725d;
   font-size: 8px;
   letter-spacing: 0.8px;
@@ -1213,32 +1285,223 @@ h2 {
 }
 @media (max-width: 1150px) {
   .sidebar {
-    width: 225px;
-    min-width: 225px;
+    width: 17.3rem;
+    min-width: 17.3rem;
   }
   .session-header {
-    padding: 24px 20px;
+    padding: 1.85rem 1.55rem;
   }
   .session-title h1 {
-    max-width: 330px;
+    max-width: 25rem;
   }
   .session-path span {
-    max-width: 330px;
+    max-width: 25rem;
   }
   .work-area {
-    margin-left: 20px;
-    margin-right: 18px;
+    margin-left: 1.55rem;
+    margin-right: 1.4rem;
   }
   .files-panel {
-    width: 225px;
+    width: 17.3rem;
   }
   .panel-label {
     display: none !important;
   }
   .welcome-features {
-    gap: 20px;
+    gap: 1.5rem;
   }
   .session-actions {
     gap: 8px;
   }
+}
+
+/* M9.3: motion-sensitive users get the transitions stripped. The focus rules
+ * above already use both box-shadow and outline, so they survive this. */
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
+}
+
+/* M9.3: forced-colors mode (Windows High Contrast / forced on Linux via
+ * some AT shells). The accent colour collapses to `Highlight`; our outline
+ * declaration above already survives this — we only need to remap the
+ * status-dot backgrounds so they don't lose all signal. */
+@media (forced-colors: active) {
+  .dot {
+    background: CanvasText;
+  }
+  .dot.live {
+    background: Highlight;
+    box-shadow: none;
+  }
+  .dot.exited {
+    background: Mark;
+  }
+  .running-pill {
+    border-color: CanvasText;
+  }
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+/* M9.3: visually-hidden text for screen readers (used by the terminal
+   status mirror and any future aria-live regions). The element occupies
+   a 1px box but is invisible to sighted users. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* M9.3: keyboard cheatsheet table. Plain, dense layout — readability is
+   the goal, not flair. The kbd tag is rendered with a light pill so the
+   hotkey stays visually distinct from the description column. */
+.cheatsheet {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.cheatsheet thead th {
+  text-align: left;
+  font-size: 9px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: #95a489;
+  padding: 0 8px 8px;
+  border-bottom: 1px solid #2c3529;
+}
+.cheatsheet tbody td {
+  padding: 8px;
+  border-bottom: 1px solid #232923;
+  color: #c9d5bd;
+}
+.cheatsheet tbody tr:last-child td {
+  border-bottom: 0;
+}
+.cheatsheet kbd {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid #404b3a;
+  background: #232923;
+  color: #d2e0c5;
+  font:
+    11px "JetBrains Mono", "Cascadia Code", "DejaVu Sans Mono", monospace;
+  white-space: nowrap;
+}
+
+/* M9.3: command palette. The listbox rows are clickable buttons; the
+   highlighted row gets the accent background. The list scrolls inside the
+   modal so the dialog itself stays the same size. */
+.command-palette-results {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  max-height: 45vh;
+  overflow-y: auto;
+  border: 1px solid #2c3529;
+  border-radius: 6px;
+  background: #161a16;
+}
+.command-palette-empty {
+  padding: 18px;
+  text-align: center;
+  font-size: 11px;
+  color: #7a8c6c;
+}
+.command-palette-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #c9d5bd;
+  border-bottom: 1px solid #232923;
+}
+.command-palette-row:last-child {
+  border-bottom: 0;
+}
+.command-palette-row.highlight,
+.command-palette-row[aria-selected="true"] {
+  background: #2a3627;
+  color: #e0ebd7;
+}
+.command-palette-scope {
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #7a8c6c;
+  padding: 2px 6px;
+  border: 1px solid #30382c;
+  border-radius: 3px;
+}
+
+/* M9.3: Advanced controls gate. Lives inside the presets dialog at the
+   bottom of the editor. The summary row is a clickable `<summary>` so a
+   keyboard user can open/close it without a mouse. */
+.advanced-controls {
+  margin-top: 22px;
+  padding: 14px 16px;
+  border: 1px solid #2c3529;
+  border-radius: 6px;
+  background: #181c19;
+}
+.advanced-controls summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #d2e0c5;
+}
+.advanced-controls summary::-webkit-details-marker {
+  display: none;
+}
+.advanced-controls-state {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 9px;
+  border: 1px solid #30382c;
+  color: #95a08a;
+}
+.advanced-controls[open] .advanced-controls-state {
+  background: #2d3c26;
+  color: #c5edaa;
+  border-color: #3d5330;
+}
+.advanced-controls-help {
+  margin: 12px 0 0;
+  font-size: 11px;
+  color: #95a08a;
+  line-height: 1.6;
+}
+
+/* M9.3: small "Adv" badge on the managed-mode topbar toggle when advanced
+   is off. Sized to sit beside the icon without inflating the button. */
+.advanced-badge {
+  font-size: 8px;
+  letter-spacing: 1px;
+  padding: 1px 4px;
+  border: 1px solid #4d3d28;
+  border-radius: 3px;
+  color: #c9b59b;
+  background: #2a2218;
 }

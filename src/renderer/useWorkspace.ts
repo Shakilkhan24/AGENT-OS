@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Snapshot, TerminalView } from "../shared/types";
 
-/** Polls cannot overwrite a newer mutation response when IPC resolves out of order. */
+/** Push hints trigger coalesced refreshes; fallback polls cannot overwrite a newer response. */
 export function useWorkspace(report: (error: unknown) => void) {
   const [snapshot, setSnapshot] = useState<Snapshot>({
     sequence: 0,
@@ -10,6 +10,7 @@ export function useWorkspace(report: (error: unknown) => void) {
   });
   const [ready, setReady] = useState(false);
   const latest = useRef(0);
+  const stoppedRef = useRef(false);
   const accept = useCallback((next: Snapshot) => {
     if (next.sequence < latest.current) return;
     latest.current = next.sequence;
@@ -18,23 +19,47 @@ export function useWorkspace(report: (error: unknown) => void) {
   }, []);
   useEffect(() => {
     let stopped = false;
+    let polling = false, invalidated = false;
     let timer: ReturnType<typeof setTimeout>;
+    const unsubscribe = window.minimal.onProtocolFailure(failure => report(new Error(failure.message)));
     const poll = async () => {
+      if (stopped) return;
+      if (polling) { invalidated = true; return; }
+      clearTimeout(timer); polling = true;
       try {
         const next = await window.minimal.snapshot();
         if (!stopped) accept(next);
       } catch (error) {
         if (!stopped) report(error);
       }
-      if (!stopped) timer = setTimeout(poll, 4000);
+      polling = false;
+      if (!stopped) timer = setTimeout(poll, invalidated ? 25 : 4000);
+      invalidated = false;
     };
+    const unsubscribeChanges = window.minimal.onWorkspaceChanged(() => {
+      if (polling) { invalidated = true; return; }
+      clearTimeout(timer); timer = setTimeout(poll, 25);
+    });
     void poll();
     return () => {
       stopped = true;
+      stoppedRef.current = true;
       clearTimeout(timer);
+      unsubscribe();
+      unsubscribeChanges();
     };
   }, [accept, report]);
-  return { snapshot, ready, accept };
+  // Refresh the snapshot on demand (used after IPC mutations that don't
+  // route through the orchestrator's change-bus, e.g. M3c.3 attention
+  // transitions and artifact previews).
+  const refresh = useCallback(async () => {
+    if (stoppedRef.current) return;
+    try {
+      const next = await window.minimal.snapshot();
+      accept(next);
+    } catch (error) { report(error); }
+  }, [accept, report]);
+  return { snapshot, ready, accept, refresh };
 }
 
 /**
@@ -47,6 +72,11 @@ function shallowEqual(a: Snapshot, b: Snapshot): boolean {
   if (a.sequence === b.sequence) return true;
   if (a.presets !== b.presets || a.sessions.length !== b.sessions.length) return false;
   if (a.engineError !== b.engineError || a.envProfiles !== b.envProfiles || a.hooks !== b.hooks || a.launches !== b.launches) return false;
+  // M3c.1: treat the `managed` projection block as identity-compared so the
+  // managed review shell re-renders only when M3 state actually changes.
+  // The projection is rebuilt as a fresh object each snapshot, so reference
+  // equality is the right (cheap) signal here.
+  if (a.managed !== b.managed) return false;
   for (let i = 0; i < a.sessions.length; i++) {
     const left = a.sessions[i];
     const right = b.sessions[i];

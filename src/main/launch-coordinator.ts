@@ -21,6 +21,7 @@ export class LaunchCoordinator {
   private active = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private queue = new Mutex(64);
   private closed = false;
+  private beginnings = new Set<Promise<LaunchRecord>>();
   constructor(private repository: WorkspaceState, private engine: EngineAdapter, private files: SessionFilesystem,
     private events: EventBus, private changed: () => void, private ttlMs = 24 * 60 * 60 * 1000) {}
   get(id: string) {
@@ -44,7 +45,13 @@ export class LaunchCoordinator {
     await this.events.publish({ type: "launch-progress", sourceId: "launch", sessionId: record.sessionId,
       correlationId: record.id, data: { launchId: record.id, completed: record.completed, total: record.terminalIds.length, state: record.state } });
   }
-  async begin(sessionId: string, request: LaunchRequest): Promise<LaunchRecord> {
+  begin(sessionId: string, request: LaunchRequest): Promise<LaunchRecord> {
+    const pending = this.beginInternal(sessionId, request);
+    this.beginnings.add(pending);
+    void pending.finally(() => this.beginnings.delete(pending)).catch(() => {});
+    return pending;
+  }
+  private async beginInternal(sessionId: string, request: LaunchRequest): Promise<LaunchRecord> {
     if (this.closed) throw new AppError("UNAVAILABLE", "The workspace is closing");
     const options = launchSchema.parse(request);
     const fingerprint = createHash("sha256").update(canonical(options)).digest("hex");
@@ -56,6 +63,7 @@ export class LaunchCoordinator {
     if (this.active.size >= 64) throw new AppError("BUSY", "The launch queue is full");
     const session = this.repository.session(sessionId);
     const cwd: string = await this.files.run(session, { action: "directory", path: options.cwd });
+    if (this.closed) throw new AppError("UNAVAILABLE", "The workspace is closing");
     let created = false;
     const record = await this.repository.update(state => {
       const duplicate = state.launches.find(item => item.sessionId === sessionId && options.idempotencyKey && item.key === options.idempotencyKey && item.expiresAt > Date.now());
@@ -94,6 +102,7 @@ export class LaunchCoordinator {
     });
     if (created) {
       const controller = new AbortController();
+      if (this.closed) controller.abort();
       // Register before the worker gets a turn, so cancellation/deduplication observes it.
       const promise = Promise.resolve().then(() => this.queue.run(() => this.run(record.id, controller.signal)));
       this.active.set(record.id, { controller, promise });
@@ -146,5 +155,13 @@ export class LaunchCoordinator {
   async wait(id: string) { await this.active.get(id)?.promise; return this.get(id); }
   cancel(id: string) { const record = this.get(id); this.active.get(id)?.controller.abort(); return record; }
   cancelSession(id: string) { for (const record of this.repository.read().launches) if (record.sessionId === id) this.active.get(record.id)?.controller.abort(); }
-  close() { this.closed = true; for (const value of this.active.values()) value.controller.abort(); }
+  async close() {
+    this.closed = true;
+    for (const value of this.active.values()) value.controller.abort();
+    await Promise.allSettled(this.beginnings);
+    for (const value of this.active.values()) value.controller.abort();
+    const results = await Promise.allSettled([...this.active.values()].map(value => value.promise));
+    const failure = results.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }
 }

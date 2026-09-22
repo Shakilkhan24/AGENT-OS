@@ -3,20 +3,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 /**
- * Durability levels for an atomic write. Higher levels cost more `fsync`
- * syscalls; pick the lowest level your caller can tolerate.
- *
- * - `"strong"`: fsync the data file **and** the parent directory. Recovers
- *   correctly after a power loss at any point in the write. This is the
- *   default for backwards compatibility.
- * - `"async-strong"`: fsync the data file only. The `rename(2)` is still
- *   atomic, so a power loss leaves either the old or the new file in place
- *   but never a torn write. Recommended for the hot save path: the old
- *   file is a strictly older version of the same logical document, so
- *   recovering to it is always safe.
- * - `"crash"`: write-then-rename with no fsync. Survives a clean process
- *   crash but **not** a power loss. Use only for cache-style state where
- *   the next launch can recompute.
+ * strong (default) syncs the data and parent directory; async-strong skips
+ * directory sync; crash skips both. We rely on the filesystem honoring fsync.
+ * Without directory sync, power-loss durability of the rename is not promised.
  */
 export type Durability = "strong" | "async-strong" | "crash";
 
@@ -47,9 +36,7 @@ export async function atomicJson(
     }
     await rename(temporary, file);
     if (durability === "strong") {
-      // fsync the parent directory so the rename is durable. This costs an
-      // extra syscall on every save and is unnecessary for documents that
-      // are version-on-version (the previous version is still safe to load).
+      // Persist the directory entry as well as the file contents.
       const directory = await open(path.dirname(file), "r");
       try {
         await directory.sync();

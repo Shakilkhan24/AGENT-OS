@@ -99,14 +99,15 @@ test("Custom settings file is honored on the next launch", async () => {
     });
     try {
       const page = await app2.firstWindow();
+      // firstWindow resolves before the renderer finishes loading. Complete the
+      // restart before closing it, so Chromium is not torn down mid-navigation.
+      await page.waitForLoadState("load");
       const live = await page.evaluate(() => window.minimal.getSettings());
       expect(live.gracefulStopMs).toBe(4321);
       expect(live.draftIntervalMs).toBe(200);
     } finally {
-      // Force the Electron process to quit before teardown reuses its data
-      // directory — `app.close()` can hang waiting for tmux attachments
-      // when no explicit teardown is wired in.
-      await app2.evaluate(({ app }) => app.quit()).catch(() => {});
+      // Await process exit and dispose the automation connection before cleanup.
+      await app2.close();
     }
   } finally {
     await teardown();

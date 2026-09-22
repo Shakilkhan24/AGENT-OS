@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 export function Modal({
   title,
@@ -16,14 +16,22 @@ export function Modal({
   error?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId(), subtitleId = useId();
   useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
+    const dialog = ref.current!;
+    const opener = document.activeElement;
+    dialog.showModal();
+    return () => {
+      dialog.close();
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
   }, []);
   return (
     <dialog
       ref={ref}
       className="modal"
+      aria-labelledby={titleId}
+      aria-describedby={subtitle ? subtitleId : undefined}
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) close();
@@ -31,8 +39,8 @@ export function Modal({
     >
       <div className="modal-header">
         <div>
-          <h2>{title}</h2>
-          {subtitle && <p>{subtitle}</p>}
+          <h2 id={titleId}>{title}</h2>
+          {subtitle && <p id={subtitleId}>{subtitle}</p>}
         </div>
         <button
           className="icon-button"

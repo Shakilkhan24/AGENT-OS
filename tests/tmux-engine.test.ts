@@ -24,12 +24,12 @@ test("the tmux adapter isolates environment, preserves odd paths and pushes exit
   const unsubscribe = engine.onChange(() => { pushed++; });
   await engine.create({ id, label: "Environment", cwd, command: 'printf "%s" "$MINIMAL_TEST_VALUE" > result; sleep 0.8; exit 17', createdAt: new Date().toISOString(), env: { MINIMAL_TEST_VALUE: "literal $() ; ✓" } });
   assert.equal((await engine.inspect()).get(id)?.cwd, cwd);
-  // Wait for the wait-for observer to wake us. The pane runs `sleep 0.8;
-  // exit 17`, so the observer should fire well within a second on a normal
-  // box, but a loaded CI runner can take several seconds to drive the
-  // socket + pipe back through `pane-exit`. 200 × 50 ms = 10 s ceiling.
-  for (let attempt = 0; !pushed && attempt < 200; attempt++) await delay(50);
-  assert.ok(pushed > 0, "pane-died wakes a wait-for observer without polling");
+  // Production combines hooks and polling. Polling also recovers an unreaped
+  // shell when WSL misses SIGCHLD; the resulting pane-died hook must still fire.
+  for (let attempt = 0; !pushed && attempt < 100; attempt++) {
+    await delay(50); await engine.inspect();
+  }
+  assert.ok(pushed > 0, "pane-died wakes the observer, including after exit recovery");
   const pane = (await engine.inspect()).get(id)!;
   assert.equal(pane.dead, true);
   assert.equal(pane.exitCode, 17);

@@ -2,6 +2,606 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.8] - 2026-09-22
+
+M9.3 accessibility code delivery. Closes the code-side half of M9.3
+in [`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+The supported prefix of user-facing features is unchanged from 1.2.7;
+this cut lands the keyboard-first workflows, advanced-controls gate,
+and the headless DOM contract that supplements the manual
+screen-reader qualification.
+
+### Highlights
+
+- **Command palette.**
+  [`src/renderer/CommandPalette.tsx`](../src/renderer/CommandPalette.tsx)
+  + `Ctrl+Shift+P` global hotkey. The matching algorithm is the pure
+  helper in `src/renderer/command-logic.ts`; recent commands are
+  stored under `localStorage("minimal.recent-commands")` (max 5).
+  The palette's `<input>` carries `autoFocus`, `aria-controls`, and
+  `aria-activedescendant`; the result `<ul>` is a `role="listbox"`
+  with `role="option"` rows. Result limit 12; arrow keys move the
+  highlight; Enter activates; recent commands appear above results
+  when the query is empty.
+- **Keyboard cheatsheet.**
+  [`src/renderer/KeyboardCheatsheet.tsx`](../src/renderer/KeyboardCheatsheet.tsx)
+  + `?` global hotkey + a visible icon button on the topbar
+  (`aria-keyshortcuts="?"`). Ten rows of hotkeys live in
+  [`src/renderer/cheatsheet-data.ts`](../src/renderer/cheatsheet-data.ts)
+  so a test can assert the table contents without rendering the
+  dialog.
+- **Global hotkeys.**
+  [`src/renderer/useGlobalShortcuts.ts`](../src/renderer/useGlobalShortcuts.ts)
+  wires the four M5.6-deferred hotkeys. `Ctrl+Shift+P` is global
+  (the palette *is* a text input, and a user inside a terminal can
+  summon it without first clicking out). `Ctrl+Shift+S` (managed
+  toggle), `Ctrl+Shift+↑/↓` (focus cycle), and `?` (cheatsheet)
+  bail inside text inputs and inside an attached xterm surface.
+- **Focus cycle.** `Ctrl+Shift+↑/↓` walks
+  `.sidebar .session-card → .managed-review → .terminal-panel →
+  .inbox-button → back`, skipping disabled and
+  `tabindex="-1"` elements.
+- **Advanced controls gate.** New
+  [`src/renderer/AdvancedControls.tsx`](../src/renderer/AdvancedControls.tsx)
+  component lives inside the Presets dialog as a `<details>`. Default
+  is off; flipping it on persists under
+  `localStorage("minimal.advanced")` and unlocks the managed-mode
+  topbar toggle + the cheatsheet palette actions. When off, the
+  managed toggle is disabled, has an "Adv" badge, and a tool-tip
+  pointing the user to the gate.
+- **Terminal host a11y contract.**
+  [`src/renderer/Terminal.tsx`](../src/renderer/Terminal.tsx) now
+  ships `role="log"`, `aria-live="polite"`, and an
+  `aria-label="Terminal output for {label}"` on the
+  `.terminal-surface` host. A visually-hidden
+  `[data-testid="terminal-status"]` span mirrors the connection
+  state and announces connect/disconnect/exit transitions to AT.
+  The `Ctrl+Shift+C/V` hijack is now
+  `if (!term.hasSelection()) return true;` — AT-driven copy/paste
+  is no longer swallowed when there is no terminal selection.
+- **Visible focus.**
+  [`src/renderer/style.css`](../src/renderer/style.css) introduces a
+  `--focus-ring` token + a `:focus-visible` block (covering
+  `input`, `select`, `textarea`, `button`, and `a`) + a
+  `.terminal-surface:focus-within` rule (xterm.js suppresses
+  outlines on its descendants). The double
+  `outline + box-shadow` rule survives
+  `forced-colors: active`. A `@media (prefers-reduced-motion: reduce)`
+  block strips transitions for motion-sensitive users.
+- **200% zoom reflow.** Pixel widths in the chrome have been
+  converted to `rem` units (sidebar 20rem, topbar 4.5rem, session
+  header padding in rem) so the layout reflows correctly at 200%
+  zoom. The contract is asserted by
+  [`tests/desktop/zoom.spec.ts`](../tests/desktop/zoom.spec.ts)
+  (topbar must not clip horizontally; body must not overflow the
+  viewport width).
+- **Color-independent status.** The running-pill is no longer
+  colour-only: it carries an `aria-label` (e.g. "2 terminals
+  running" or "Runtime status unavailable") and
+  `role="status"`. The dot has a sibling text node, so AT still
+  announces the value. The application-version `<span>` in the
+  footer now carries an `aria-label` so screen readers announce
+  the version once rather than reading the literal characters.
+- **Screen-reader qualification.**
+  [`docs/screen-reader-qualification.md`](../docs/screen-reader-qualification.md)
+  records the M9.3 manual run matrix (Ubuntu 22.04 + Orca 46+,
+  WSL2 + WSLg + NVDA 2024.x — five smoke flows, three independent
+  days on different keyboard layouts). The M9.3 bullet is
+  "qualified" only when all five flows pass on both configurations
+  across all three runs.
+- **Headless DOM contract.** Three new tests in
+  [`tests/desktop/foundation.spec.ts`](../tests/desktop/foundation.spec.ts)
+  + [`tests/desktop/a11y.spec.ts`](../tests/desktop/a11y.spec.ts)
+  assert: terminal host `role`/`aria-live`/`aria-label`, running-pill
+  `aria-label`, the four global hotkeys open their dialogs, the
+  palette's `<input>` receives focus, the cheatsheet lists the four
+  M9.3 hotkeys, and `Ctrl+Shift+P` does NOT fire while focus is
+  inside an attached xterm.
+
+### File surface
+
+- `src/renderer/AdvancedControls.tsx` — Advanced controls gate.
+- `src/renderer/CommandPalette.tsx` — palette dialog.
+- `src/renderer/KeyboardCheatsheet.tsx` — cheatsheet dialog.
+- `src/renderer/VisuallyHidden.tsx` — visually-hidden helper.
+- `src/renderer/cheatsheet-data.ts` — cheatsheet table contents.
+- `src/renderer/useGlobalShortcuts.ts` — global hotkey wiring.
+- `src/renderer/Terminal.tsx` — terminal host a11y contract.
+- `src/renderer/WorkspaceDialog.tsx` — `Dialog` union extension +
+  Advanced controls gate rendering.
+- `src/renderer/App.tsx` — palette + cheatsheet + hotkey wiring +
+  recent commands + focus cycle + running-pill `aria-label` +
+  advanced-badge.
+- `src/renderer/style.css` — `--focus-ring` token, `:focus-visible`
+  block, `forced-colors` + `prefers-reduced-motion` fallbacks,
+  rem-unit reflow, palette / cheatsheet / advanced-badge styles.
+- `src/renderer/AttentionInbox.module.css` + `ManagedReview.module.css` —
+  reflow tuning.
+- `docs/screen-reader-qualification.md` — manual run matrix.
+- `tests/desktop/foundation.spec.ts` — 3 new a11y tests.
+- `tests/desktop/a11y.spec.ts` — keyboard + palette + cheatsheet flows.
+- `tests/desktop/zoom.spec.ts` — 200% zoom reflow contract.
+
+### M9.6 preserved
+
+- Five boundary docs (`distribution`, `security`, `provider-economics`,
+  `commercial-decision`, `cancel-and-walk-away`) are unchanged.
+- 14/14 M9.6 doc-freshness tests still pass.
+
+### M9.5 preserved
+
+- Pilot harness + refuse-to-spend gate is unchanged.
+- Williams 3×6 counterbalance + 20-fixture skeleton bank is unchanged.
+- `pilotReport.caveats[]` literal honest-limit lines are unchanged.
+
+### M9.4 preserved
+
+- `settings.telemetry: false` default is unchanged.
+- `connect-src 'none'` CSP audit still passes.
+- `classifySourceForRetention()` retention floor still holds.
+- `diagnostics:export` canary pipeline still catches planted tokens.
+
+## [1.2.7] - 2026-09-22
+
+M9.6 boundary-pinning docs. Closes M9.6 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+This is a docs-only release; the supported prefix of user-facing
+features is unchanged from 1.2.6. The M9.6 bullet's "if
+commercialization is selected" clause evaluates to false at the
+time of recording; this cut pins the current boundaries in writing
+rather than adding new commercial surfaces.
+
+### Highlights
+
+- **Distribution inventory.**
+  [`docs/distribution.md`](../docs/distribution.md) — the shipped-
+  tree inventory, license matrix, update-mechanism statement
+  (Linux-only per `scripts/package.mjs:8-9`, unsigned release per
+  `scripts/verify-release.mts:11-13`), and counsel-gate reminder
+  (research doc 12 lines 70-78, quoted verbatim).
+- **Auth-rights statement.**
+  [`docs/security.md`](../docs/security.md) — the principal model
+  is local-only; the anti-self-approval rule cascades through three
+  call sites; the failure-code table enumerates the seven
+  authorization-bearing codes; the "what MINIMAL does NOT do"
+  section makes the absence of remote users, multi-tenant
+  boundaries, license-key validation, and remote-revocation paths
+  explicit.
+- **Provider-economics commitment.**
+  [`docs/provider-economics.md`](../docs/provider-economics.md) —
+  MINIMAL never holds, charges, or transfers provider spend
+  (mirrors research doc 12 line 51). The three audit surfaces
+  (pricing-catalog, observation, budget-gate) are display / audit /
+  enforcement only — never billing. The M9.5 refuse-to-spend gate
+  trips `AppError("BUDGET_EXCEEDED")`; it does not move money.
+- **Commercial-decision record.**
+  [`docs/commercial-decision.md`](../docs/commercial-decision.md) —
+  the explicit no-commercialization record at charter version
+  `1.0.0`. §3 lists the reversal criteria (cohort go/no-go rule met
+  for at least one of the three research-doc experiments + counsel
+  review of the four research-doc gates + a separate milestone
+  that delivers the corresponding primitives). §4 records the
+  explicit absence of a support-cost model in code.
+- **Cancel-and-walk-away runbook.**
+  [`docs/runbooks/cancel-and-walk-away.md`](../docs/runbooks/cancel-and-walk-away.md) —
+  the operator's portability drill. Walks the four phases (backup,
+  verify, diagnostics, restore) end-to-end on a clean supported
+  machine. §6 ("what does NOT transfer") restates research doc 12
+  line 82 verbatim.
+
+### File surface
+
+- `docs/distribution.md` — shipped-tree inventory + update-mechanism statement.
+- `docs/security.md` — local-only principal model + anti-self-approval + failure-code table.
+- `docs/provider-economics.md` — separation commitment + audit surfaces + portability.
+- `docs/commercial-decision.md` — explicit no-commercialization record at charter version `1.0.0`.
+- `docs/runbooks/cancel-and-walk-away.md` — operator's portability drill.
+- `docs/release-notes-1.2.7.md` — release notes for this cut.
+- `tests/release/distribution-inventory.test.ts` — distribution doc freshness guard.
+- `tests/docs/security-statement.test.ts` — security doc freshness guard.
+- `tests/docs/provider-economics.test.ts` — provider-economics doc freshness guard.
+- `tests/docs/commercial-decision.test.ts` — commercial-decision doc freshness guard.
+- `tests/release/cancel-walkaway.test.ts` — cancel-and-walk-away runbook freshness guard.
+
+### M9.5 preserved
+
+- Pilot harness + refuse-to-spend gate (`src/runtime/pilot/`) is unchanged.
+- Williams 3×6 counterbalance + 20-fixture skeleton bank is unchanged.
+- `pilotReport.caveats[]` literal honest-limit lines are unchanged.
+
+### M9.4 preserved
+
+- `settings.telemetry: false` default is unchanged.
+- `connect-src 'none'` CSP audit still passes.
+- `classifySourceForRetention()` retention floor still holds.
+- `diagnostics:export` canary pipeline still catches planted tokens.
+
+## [1.2.6] - 2026-09-22
+
+M9.5 pilot harness + refuse-to-spend path. Closes M9.5 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+This is an opt-in research instrument; the supported prefix of
+user-facing features is unchanged from 1.2.5.
+
+### Highlights
+
+- **Pre-registration charter.** [`docs/pilot-charter.md`](../docs/pilot-charter.md)
+  locks the M9.5 study design at `charterVersion: "1.0.0"`: N=6,
+  Williams 3×6 in one balanced block, three USD caps with
+  warn-at-0.8, unknown-cost discipline. The charter is a starting
+  proposal, not a powered sample — the honest-limit disclosure is
+  surfaced as a literal `caveats[]` report field, not buried in prose.
+- **Williams 3×6 counterbalance.**
+  [`src/runtime/pilot/counterbalance.ts`](../src/runtime/pilot/counterbalance.ts)
+  exposes deterministic per-participant condition order via
+  sha256 mod 6. Every adjacent (unordered) pair appears exactly
+  4 times across the 12 ordered adjacencies in the canonical
+  square.
+- **Refuse-to-spend gate.**
+  [`src/runtime/pilot/budget-gate.ts`](../src/runtime/pilot/budget-gate.ts)
+  classifies each observation's reported spend as `ok | warn | refuse`
+  and emits `BudgetEvent` records. Refusal halts the current attempt
+  with `outcome: "abandoned"` and `failure.code = "BUDGET_EXCEEDED"`
+  (new code in `src/shared/errors.ts:Failure.code`).
+- **Grader.** [`src/runtime/pilot/grader.ts`](../src/runtime/pilot/grader.ts)
+  evaluates each fixture's `acceptance[]` rules against a normalised
+  `CapturedArtifacts` bundle and rolls them into an `AttemptOutcome`.
+  Soft rules (`mustPass: false`) record the failure on the decision
+  surface but do not reject the attempt.
+- **Runner + aggregate reporter.**
+  [`src/runtime/pilot/runner.ts`](../src/runtime/pilot/runner.ts) and
+  [`src/runtime/pilot/aggregate.ts`](../src/runtime/pilot/aggregate.ts)
+  drive a pilot end-to-end and assemble a `PilotReport`. The
+  `caveats[]` field carries the four honest-limit lines by default —
+  including the literal "this pilot cannot establish universal
+  productivity multipliers" disclaimer.
+- **20-fixture skeleton bank.** 4 fixtures per family across the 5
+  families from
+  `FUTURE/docs/research/10-evaluation-productivity.md §3` under
+  [`tests/fixtures/pilot/`](../tests/fixtures/pilot/). Schema-valid;
+  concrete acceptance-rule bodies are follow-up work. The bank shape
+  is asserted by
+  [`tests/runtime/pilot-fixtures.test.ts`](../tests/runtime/pilot-fixtures.test.ts).
+- **CLI + scripts.** [`scripts/run-pilot.mts`](../scripts/run-pilot.mts)
+  with the same exit-code contract as `diagnostics-export` (0/1/2/3).
+  `npm run pilot:run` (powered, opt-in) and `npm run pilot:synthetic`
+  (no I/O, opt-in).
+- **Gate test.** [`tests/runtime/m9_5-pilot-gate.test.ts`](../tests/runtime/m9_5-pilot-gate.test.ts)
+  exercises the runner end-to-end: 6 × 5 × 3 = 90 synthetic attempts
+  across all 5 fixture families. Evidence map mirrors the M9.0 gate
+  pattern.
+
+### File surface
+
+- `src/shared/pilot-schema.ts` — typed contract for fixtures, budgets,
+  attempt records, budget events, and the aggregate `PilotReport`.
+- `src/runtime/pilot/counterbalance.ts` — Williams 3×6 helpers.
+- `src/runtime/pilot/budget-gate.ts` — refuse-to-spend gate.
+- `src/runtime/pilot/grader.ts` — pure acceptance evaluator.
+- `src/runtime/pilot/runner.ts` — pilot orchestration core.
+- `src/runtime/pilot/aggregate.ts` — aggregate reporter.
+- `src/runtime/pilot/__tests__/{counterbalance,budget-gate,grader}.test.ts`
+  — unit tests.
+- `tests/runtime/m9_5-pilot-gate.test.ts` — gate test (synthetic).
+- `tests/runtime/pilot-fixtures.test.ts` — fixture bank discovery.
+- `tests/fixtures/pilot/*.fixture.json` — 20 fixture stubs (4 per family).
+- `tests/fixtures/pilot-synthetic-charter.json` — synthetic charter.
+- `tests/fixtures/pilot-synthetic-report.json` — checked-in sample
+  `PilotReport` produced by `npm run pilot:synthetic`.
+- `scripts/run-pilot.mts` — CLI.
+- `docs/pilot-charter.md` — pre-registration charter.
+- `docs/runbooks/run-pilot.md` — operator runbook.
+- `docs/release-notes-1.2.6.md` — release notes for this cut.
+
+### M9.4 preserved
+
+- `settings.telemetry: false` default is unchanged.
+- `connect-src 'none'` CSP audit still passes.
+- `classifySourceForRetention()` retention floor still holds.
+- `diagnostics:export` canary pipeline still catches planted tokens.
+
+## [1.2.5] - 2026-09-22
+
+M9.4 diagnostics cut. Closes M9.4 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+
+### Highlights
+
+- **Telemetry is off by default.** `settings.telemetry` defaults to
+  `false` and ships dormant. No uploader exists. The renderer
+  Content-Security-Policy (`connect-src 'none'`) blocks any
+  future inadvertent destination. The
+  `tests/desktop/telemetry-csp.spec.ts` audit locks the policy at
+  the source.
+- **Operational logs use allowlisted fields + correlation IDs.**
+  The offline export pipeline runs the 22-key allowlist over every
+  record; anything outside the allowlist becomes `[REDACTED]` and
+  the count surfaces on the audit surface. Correlation IDs are
+  end-to-end and back-filled when missing.
+- **Two scrubbers, distinct roles.** `src/main/logging.ts:scrub`
+  stays cheap for hot-path observability;
+  `src/release/diagnostic-scrubber.ts:scrubRecord / scrubBundle`
+  is the offline allowlist+canary scrubber. Both are documented
+  in [`docs/diagnostics.md`](../docs/diagnostics.md).
+- **Retention floor.** `pending-decision`, `live-intent`, and
+  `recoverable-candidate` entries are NEVER removed by the
+  day-rollover purge or the event-journal hard cap. The
+  classification is sourced from
+  `classifySourceForRetention(source)`; the default for any
+  uncategorised source is `operational`.
+- **Canary tests for secrets/paths.** The end-to-end test plants
+  all six default canary tokens (SSH key, AWS key, GitHub token,
+  bearer token, home-directory path, 32-char hex) through a real
+  `Logger.write`, drains the NDJSON, runs `scrubBundle`, and
+  asserts `failedCanaries.length === 0`. The scrubber recurses
+  into nested objects so a leaked secret in `fields.hostId`
+  (or any other nested structure) is replaced, not just
+  detected.
+- **Scrubber limits disclosed honestly.** Free-form `message`
+  text is passed through; the canary pass catches leaks but does
+  not scrub free-form text. The hot-path scrubber doesn't
+  recognise home-directory paths, AWS access keys, SSH private
+  keys, GitHub/bearer tokens, hex secrets, or env-lines — the
+  M3a `redactSecrets` walker covers those at runtime. The
+  diagnostic scrubber never claims "all secrets removed"; it
+  claims "all canary tokens removed" with a count.
+
+### Added
+
+- `scripts/diagnostics-export.mts` — offline bundle CLI
+  (`npm run diagnostics:export`).
+- `docs/diagnostics.md` — telemetry default, scrubber roles,
+  retention floor, canary taxonomy, scrubber limits, export
+  how-to.
+- `tests/runtime/diagnostics-export.test.ts` (6 tests).
+- `tests/runtime/event-bus-retention.test.ts` (4 tests).
+- `tests/desktop/telemetry-csp.spec.ts` (2 tests).
+
+### Changed
+
+- `src/shared/settings.ts` + `src/runtime/db/effective-settings.ts`
+  — `telemetry: z.boolean().default(false)` added to the
+  settings schema and the `KNOWN_SETTING_KEYS` allowlist.
+- `src/main/logging.ts` — `LogEntry.retentionClass`,
+  `applyRetentionClasses()` test seam, `protectedDayCount()`,
+  day-rollover floor, `MAX_PROTECTED_FILE_BYTES` cap.
+- `src/main/event-bus.ts` — class-aware journal slice,
+  `protectedCount()` test seam.
+- `src/release/compatibility-check.ts` — exports
+  `classifySourceForRetention(source)`.
+- `src/release/diagnostic-scrubber.ts` — recursive canary
+  replacement, widened `extraAllowedFields` type.
+- `src/main/index.ts` — `probeCompatibility()` called at desktop
+  startup, result logged as a `diagnostics / compatibility-probe`
+  record; failures are caught and logged as warnings.
+- `docs/compatibility.md` — fixes the "probe runs at startup"
+  claim to match the now-true behaviour.
+- `package.json` — `diagnostics:export` script, version
+  bumped to `1.2.5`.
+
+## [1.2.4] - 2026-09-21
+
+M9.3 accessibility cut. Closes M9.3 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+
+### Highlights
+
+- Keyboard-only workflows: `Ctrl+Shift+P` opens the command palette,
+  `Ctrl+Shift+S` toggles managed review (gated behind Advanced
+  controls), `Ctrl+Shift+ArrowUp/Down` cycles focus across panes,
+  `?` opens the keyboard cheatsheet. All four are wired through a new
+  `useGlobalShortcuts` hook and stay inert while a text input or an
+  attached xterm has focus (except `Ctrl+Shift+P`, which intentionally
+  fires globally).
+- Visible focus indicators: `:focus-visible` rules on
+  `input/select/textarea`, the managed-mode columns, the xterm host,
+  and the prompt + action inputs. The literal `outline` declaration
+  survives `forced-colors: active` (Windows High Contrast / forced
+  colours on Linux).
+- 200% zoom reflow: top-level layout tokens (`sidebar`, `topbar`,
+  `panel-heading`, `work-area`, `files-panel`, `app-footer`) are now
+  `rem`-rooted. The topbar and sidebar reflow at 200% instead of
+  clipping. Tested in `tests/desktop/zoom.spec.ts`.
+- Color-independent status: every `.attention-inbox-state-*` chip
+  carries a leading `+`/`−`/`●`/`○` glyph and the `.running-pill`
+  carries an `aria-label` plus `role="status"` so screen readers and
+  forced-colors shells see the same signal sighted users do.
+- Accessible xterm: the terminal surface is now `role="log"` +
+  `aria-live="polite"` + `aria-label="Terminal output for {label}"`.
+  A visually-hidden `<span aria-live="polite">` mirror announces
+  connect / disconnect / exit transitions. The custom
+  `Ctrl+Shift+C/V` keymap now only hijacks when there is an active
+  selection, so AT-driven paste works.
+- Linux/WSLg screen-reader bridge: `app.setAccessibilitySupportEnabled(true)`
+  is called in `src/main/index.ts`. Real NVDA/Orca qualification runs
+  are recorded in [`docs/screen-reader-qualification.md`](../docs/screen-reader-qualification.md).
+- Advanced controls gate: a `<details>` block in the presets dialog
+  toggles `localStorage("minimal.advanced")`. When off (default), the
+  managed-mode topbar toggle shows an `(Adv)` badge and refuses the
+  keystroke. Provider-profile and hook-activation surfaces are gated
+  through the same flag.
+
+### Added
+
+- `src/renderer/useGlobalShortcuts.ts`,
+  `KeyboardCheatsheet.tsx`, `cheatsheet-data.ts`,
+  `CommandPalette.tsx`, `VisuallyHidden.tsx`,
+  `AdvancedControls.tsx`.
+- `docs/screen-reader-qualification.md`.
+- `tests/desktop/a11y.spec.ts` (4 tests), `tests/desktop/zoom.spec.ts`
+  (2 tests), and three new tests in
+  `tests/desktop/foundation.spec.ts`.
+
+### Changed
+
+- `src/renderer/style.css` — `rem`-rooted layout, `:focus-visible`
+  rules, `prefers-reduced-motion` strip, `forced-colors` overrides,
+  `.visually-hidden` helper, cheatsheet + palette styles, advanced
+  controls styles.
+- `src/renderer/ManagedReview.module.css`,
+  `src/renderer/AttentionInbox.module.css` — focus + glyph additions.
+- `src/renderer/App.tsx` — global hotkey wiring, palette + cheatsheet
+  dialog renders, `?` button, `aria-label` on the running-pill and
+  footer, Advanced gate on managed-mode toggle.
+- `src/renderer/WorkspaceDialog.tsx` — `<AdvancedControls />` block
+  in the presets editor; `Dialog` union extended with `cheatsheet`
+  and `palette` (excluded from the prop type).
+- `src/renderer/Terminal.tsx` — `role="log"`, `aria-live`,
+  `aria-label`, visually-hidden status mirror, conditional
+  `@xterm/addon-screen-reader` import path, refactored keymap.
+- `src/main/index.ts` — `app.setAccessibilitySupportEnabled(true)`.
+- `docs/compatibility.md` — accessibility table covering keyboard,
+  focus, zoom, color, text/diff, and Linux/WSLg screen reader.
+
+### Test coverage
+
+- `npx tsc --noEmit` — 0 errors.
+- `npx tsx --test tests/runtime/m9-gate.test.ts tests/runtime/m6-gate.test.ts tests/runtime/m7-gate.test.ts tests/release/release-checksum.test.ts` — 29/29 still green.
+- `npm run build` — clean.
+- New Playwright specs (a11y + zoom) require an Electron runtime and
+  cannot run in this CI environment without `MINIMAL_ELECTRON_PATH`;
+  they execute in the desktop CI lane alongside `foundation.spec.ts`.
+
+## [Unreleased]
+
+M1 runtime foundation, in progress.
+
+- Introduce the shared versioned control manifest, preload handshake, typed replies, validated terminal signals and visible protocol failures.
+- Bound pending requests by count and UTF-8 bytes; carry deadlines/cancellation into file operations and launch batches without undoing started terminals or replaying uncertain mutations.
+- Refresh workspace state from committed event hints so terminal exit status appears promptly, retaining polling as a fallback.
+- Add an authenticated local socket transport with bounded framing, per-connection cancellation, slow-peer protection and explicit disconnect uncertainty.
+- Consolidate domain operations in an Electron-independent workspace used by the desktop facade and headless socket tests. Bind attachment control to its connection and preserve accepted batches across observer disconnects.
+- Split sidebar/search and workspace dialogs out of `App.tsx`; preserve keyboard/selection behavior and show the actual application version in the UI.
+- Ship the runtime as a separate, OS-locked Node-mode Electron process. The desktop holds the per-profile lock inode, spawns the runtime via `helpers/runtime_lock.py`, reads its `ready.json` token and connects over the authenticated socket. Duplicate owners exit 73; the runtime rejects a shared-mode socket directory; the deployment test covers lock contention, the SIGKILL/socket-privacy invariants and the handshake failure path.
+- Move accepted paste operations into a bounded, runtime-owned per-attachment input queue. The queue admits bytes up to the budget, serializes delivery per token in admission order, surfaces `terminal-input-progress` signals with byte counts, drops only unsubmitted bytes on cancel, drains admitted bytes on close, never retries ambiguous delivery, and never logs paste content. Switching tabs continues admitted bytes to the original terminal until M5.
+- Separate "close window" from "stop runtime/work". Closing the window drains desktop IPC and acknowledged drafts, then exits the GUI; the runtime keeps running with the OS lock still held. `launchRuntime` and `tryAttachRuntime` make the next desktop start attach to the existing runtime instead of spawning a duplicate. The "Stop runtime" button in the topbar is the only user-initiated path to terminate the runtime and its durable work; `flushBeforeQuit` distinguishes `desktop-stop-runtime`, `desktop-window-closed` and `desktop-killed` for postmortem clarity.
+- Add a bounded database worker (`src/runtime/db/`) that owns one SQLite connection at a time. The worker exposes `transaction`, `exclusive`, `query`, `flush` and `close` and caps in-flight work at a configurable concurrency. Two drivers share the same contract: a `node:sqlite` implementation for the runtime (Node 22.12+ / Electron engine) and an in-memory implementation for dev/tests on engines without `node:sqlite`. Both drivers apply FULL durability + WAL on SQLite, enforce uniqueness and foreign keys at the engine, and never promise transactions that span external filesystem/process effects. The M2 entity schema (sessions, terminals, presets, env profiles, hooks, launches, events, drafts, meta) lives in `schema.ts` and is exercised by focused tests in `tests/runtime/db.test.ts`.
+- Separate stable profile/namespace identity from storage paths. The active DB stages under `/tmp/minimal-${uid}/${profileId}/state.db` even when projects or old profiles live on OneDrive, with a 128-bit random `profile.id` decoupled from the data-directory path so relocation, OneDrive churn and OS-level profile moves don't invalidate the stable execution namespace.
+- Import legacy JSON state (schemas 1 and 2, `events.json`, settings, drafts) into the bounded SQLite store with full-digest backups (SHA-256, refuse-to-overwrite) and a resumable migration manifest. Import legacy events as historical evidence, never as commands to execute.
+- Validate staged counts, representative values, integrity, foreign keys and all required content references before activation. Activate a small `active.json` locator durably on the destination filesystem; cross-mount copy is a recoverable staged operation. Old live clients block migration. The locator refuses newer schemas; older schemas activate cleanly.
+- Add a consistent snapshot + database-generation/event-cursor handshake. `takeSnapshot` returns the current generation and a frozen serialisable projection; `replaySince` returns deduplicated events whose seq is strictly greater than the caller's high-water mark. Retention gaps or restored generations require a fresh snapshot. Polling remains as a fallback, not the only delivery path. Sequence cursors are encoded losslessly across JSON with a base-32 two-half packing.
+- Drafts carry a monotonic `revision` (the renderer must echo back to opt in to optimistic update checks) and a `rootIdentity` (device+inode) recorded on first save and re-verified on subsequent saves so an externally-rewritten file surfaces as CONFLICT instead of silently overwriting. `markRestored` records a `restoredFrom` marker the renderer reads to suppress auto-submit on recovered task prompts.
+- Add backup/export with pinned referenced artifacts and hashes, and isolated restore with dispatch disabled. `takeBackup` writes a sealed `manifest.json` whose state digest and per-artifact digests must round-trip; `verifyBackup` reports `DIGEST_MISMATCH` when a backup is tampered with and refuses restore. `beginRestore`/`endRestore` bracket a restore token that the dispatcher must consult before admitting any command; `restoreFromBackup` runs inside a single transaction with re-checked restore mode, replaces the live state with the backup rows, records `restored_from_manifest_nonce` for resume, and bumps the generation so reconnecting peers see the new handshake. `reconcileSurvivingExecution` diffs DB terminal rows against the surviving execution namespace, marks DB-only terminals as `survivor-gone`, reports tmux-only UUIDs as orphan, and emits a typed `execution.reconciled` audit event.
+- Introduce the eight M3a managed-work entities (`task`, `run`, `invocation`, `dispatch_intent`, `workspace`, `grant`, `artifact_reference`, `attention_item`) with provider/host/identity triples, explicit state machines, and composite-UNIQUE idempotency on (run_id, idempotency_key) and (uri, sha256) / (issue_identity, revision). The in-memory DB driver now parses and enforces `CREATE UNIQUE INDEX` constraints, properly sequences multi-placeholder WHERE bindings, supports `AND`/`OR` predicates, and refuses to count the freshly-inserted row as its own duplicate. New `UNSUPPORTED_RESTRICTION`, `LEASE_HELD`, `LEASE_UNCERTAIN` failure codes give downstream code the vocabulary for capability/grant mismatches and lease contention.
+- Add the `lease` entity with fencing tokens, holder identity, monotonic state machine (held → released / uncertain / expired), and the `acquireLease` / `renewLease` / `releaseLease` / `markUncertain` / `expireLease` / `transitionLease` operations. A new git worktree adapter spawns the git CLI as a child process, resolves pinned base commits, and creates/removes worktrees; `prepareManagedWorkspace` ties adapter + lease + workspace row together so the renderer can stamp every mutation with the returned fencing token. The `mutateWithLease` gate refuses a stale writer with `LEASE_UNCERTAIN` or `CONFLICT`; the in-memory driver transparently tolerates the tests' injected `GitAdapter` stub.
+- Add a `context_receipt` entity, a `redactSecrets` walker that scrubs bearer tokens, API key prefixes, SSH private keys, and high-entropy env lines from every supplied field, and a `discoverNativeInstructions` walker that finds `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `README.md` and `CONTRIBUTING.md` plus caller-supplied extra paths and computes a stable aggregate digest for the receipt. The receipt state machine proceeds draft → assembled → submitted → confirmed | rejected, refuses duplicate active receipts per run, and surfaces a `CONFLICT` to a second receipt assembly.
+- Introduce the `ProviderAdapter` port (`runtime/providers/adapter.ts`) and a process-registry that resolves `MINIMAL_PROVIDER_KIND` (default scripted) to a factory with test-seam overrides. Capabilities now report `{claude, codex, version, featureCount}` via a version-aware capability probe; missing binaries and unknown versions degrade visibly to `{version: null, featureCount: 0}`. The legacy `{claude, codex}` matrix shape is still accepted by the schema so existing test overrides do not churn. The `ScriptedProviderDouble` mirrors the wire shape of a real adapter (lifecycle events, byte-budgeted stdin, exits, disconnect) and is exercised by five focused tests covering the spawn → output → ack → exit chain and the disconnect-before-first-ack path.
+- Add the `executeOnce` orchestrator (`runtime/orchestration/execute-once.ts`) which enforces M3b.2's start ordering: idempotency (same `(runId, idempotencyKey)` returns the existing invocation; same key + different digest raises CONFLICT) → record dispatch intent → claimed → adapter spawn → spawned. Idempotent replays return `rehydrated: true`. A handle that disconnects before its first ack reaches `markAmbiguous`, which transitions the invocation to `error`, stamps `ended_reason = "ambiguous-dispatch"`, and writes a `dispatch.ambiguous` audit event; a second `executeOnce` for the ambiguous invocation surfaces `ambiguous` and never respawns.
+- Add the byte-budgeted writer (`runtime/orchestration/back-pressure.ts`) extracted from `src/main/pty-attachment.ts:22-95` (64 KiB / 256 KiB / 4 MiB thresholds), the `recordObservation` audit writer (`runtime/orchestration/observation.ts`) for `provider.observation` events with monotonic seqs, and the `ProviderHandle` discriminated lifecycle (`started`, `output`, `ack`, `exit`).
+
+### M9.0 connected-workflow complete-scope rehearsal
+
+- Add `tests/runtime/m9-gate.test.ts`: single composed test that walks all nine M9.0 sub-bullets (import dirty project → activate resources → lead coordinates providers → verify+review → save routine → schedule on owned host → close+reconnect → export → three authority gates) and records one evidence-key assertion per gate. The dirty-project phase asserts byte-identical pre/post snapshots of the project tree so the import path provably leaves the project untouched. The reconnect phase re-opens a `DbWorker` against the same `MemoryDatabase` and asserts a recorded step output round-trips. The three authority gates use distinct principal/decider pairs (alice/bob, alice/carol, carol/dave) and assert self-approval refuses with `CONFLICT`.
+- M3c.2: introduce three new entities — `verification_recipe` (per-project configuration with a deterministic SHA-256 `configuration_revision` binding key), `verification` (one row per verifier run with the captured `(base, head, porcelain digest)` candidate identity triple, bounded stdout/stderr tails, optional assertion counts, and required-check results), and `review` (the acceptance state machine: `open → accepted | rejected | invalidated`). Add the `verifyOnce` executor (`runtime/orchestration/verifier-execute.ts`) which spawns the recipe/override command in the workspace's worktree with bounded output, transitions the verification to `passed` / `failed` / `error`, and opens the bound `review` row. `mutateWithLease` now invalidates any `open` review for the same run after a successful mutation, raising an `attention_item(kind: review)` so the future M3c.3 inbox surfaces staleness. The projection gains `recipes`, `verifications`, and `reviews` slices; the renderer adds a **Verifier** section with the **Approve and run verifier** button and a **Review** section with **Accept** / **Reject** buttons. Two new IPC methods, `execute-verification` and `record-review-decision`, surface executor conflicts as structured `{kind: "conflict", reason}` envelopes so the renderer can render them inline.
+- M3c.3: ship a persistent attention inbox and bounded artifact previews. The `attention_item` row gains a `snoozed_until` column so a "snooze 1h" gesture is durable presentation, not volatile UI; the FSM widening `new → seen` lets the snooze path stay a single IPC call. `listOpenAttention` / `snoozeAttention` (and `transitionAttention`'s `snoozed → snoozed` re-snooze edge) live in `runtime/db/attention-items.ts`; the projection now ships an `openAttention` slice alongside the existing `closedAttention`, and `attentionItemViewSchema` exposes `payloadJson` + `snoozedUntil`. `previewArtifact` is the gated read path: an `approved` `grant` row whose `principal` matches and whose `digests_json` contains the artifact's `sha256`, plus a `scope_json.artifactKinds` list that includes the row's `kind`, AND a hard 8 KiB body cap (rows over the cap return `{truncated: true}` without opening the file) — content hashes alone never grant access. New `FORBIDDEN` failure code joins the existing `AppError` palette. Three new IPC methods (`transition-attention`, `snooze-attention`, `preview-artifact`) round-trip the renderer, which gains an `AttentionInbox` panel: topbar `Bell` badge counts `openAttention.length`, click opens a 360 px slide-in panel anchored to the left edge of the window, items group by `(kind, issueIdentity)` with `+N older` disclosure, payload previews render as escaped `<pre>` JSON, footer "Mark all as seen" loops the transitions. Background work never calls `window.focus()` and no IPC handler flips managed-mode off; the existing `ManagedReview` slice re-titles "Closed attention" to "Attention history" so open items only live in the new inbox. The IPC surface remains `API_VERSION = 1`; new methods are additive.
+- M3c.4: ship the diff/artifact view that consumes the M3c.3 `previewArtifact` seam. `renderCandidateDiff` (in `runtime/db/candidate-diff.ts`) shells out to `git -C <worktree> diff --no-color --no-ext-diff base..tree --` via the existing `execFileSync` pattern with a hard 256 KiB cap (`MAX_DIFF_BYTES`); rows overshooting the cap return `{truncated: true}` plus a body of exactly the cap, rows in non-Git workspaces raise `UNSUPPORTED_RESTRICTION`, and runs whose workspace lacks `baseIdentity`/`headRevision` raise `INVALID_REQUEST`. A new IPC method `render-candidate-diff` round-trips the bounded unified diff through the dispatcher with the existing `AppError → CONFLICT` mapping. The renderer's per-task `ManagedReview` pane gains a **Candidate diff** section (lazy `useMemo`-cached fetch keyed by `runId`, collapsed by default, "Show diff" toggle, line-type colouring: `+` green, `-` red, ` ` neutral, `@@` hunk slate, file headers slate, all rendered as escaped text inside `<pre>`) and a **Preview** affordance per artifact row that opens an absolutely-positioned right-side drawer (~420 px) anchored inside the managed-review shell. The drawer calls `previewArtifact(id, "user", null)` (the M3c.3 IPC seam) and renders the bounded base64 body as escaped UTF-8 text inside `<pre>`, with footer metadata (digest prefix, uri, bytes), an inline notice when the body is `truncated`, and an "open the workspace" notice for binary mimes. Escape / × / re-clicking Preview closes the drawer; selection resets when the task changes. Background work never calls `window.focus()`. The IPC surface remains `API_VERSION = 1`; the new method is additive with `since: 1.4.0`.
+- M3c.5: ship task-prompt drafts, keyboard controls, and the four managed-work action seams. Task prompts live in the `meta` table under `task-prompt-draft:<taskUuid>` (zero migration; the `draft` table is file-bound via `computeRootIdentity`, so a new helper `runtime/db/task-prompts.ts` joins the existing M2 draft surface) with the same optimistic-update revision contract as `saveDraft`. The `attention_item` row schema gains `snoozedUntil` in the public schema to match the wire shape M3c.3 already returns. The four actions ride on the M3c.3 attention dedupe model (no new `waiting_for_input` run status): `answer` resolves an open `decision` row and writes a next-revision `decision` row carrying the reply in `payload_json`; `continue` resolves the open decision AND spawns a continuation invocation via `executeOnce` (fresh `"continue:<runId>:<attentionId>:<now()>"` idempotency key, `parentInvocationId` lineage); `new-attempt` spawns a fresh invocation for the supplied run (same envelope); `stop` is a thin IPC exposure of the existing `requestStop` orchestrator (flips the run to `cancelled` and adds the runId to the process-global stop flag so future `executeOnce` calls refuse). The renderer gains a `PromptEditor` section (debounced 400 ms save, optimistic-update conflict resolution, "Saved r{N} at HH:MM:SS" footer), an `Actions` section with the four buttons (each disabled when its state-machine precondition isn't met — e.g. `Continue` requires an open `decision`, `Stop` is illegal on a terminal run), and a three-pane focus model (`list | detail | prompt`) wired by a document-level `keydown` listener: `Tab` / `Shift+Tab` cycles, `Enter` promotes list → detail, the four letter hotkeys (`a` / `c` / `n` / `s`) fire when the detail pane has focus AND no textbox is active, `Escape` pops prompt → detail when no preview drawer is open. Seven new IPC methods (`read-task-prompt-draft`, `save-task-prompt-draft`, `remove-task-prompt-draft`, `answer-attention`, `continue-invocation`, `new-attempt`, `request-stop`) round-trip the dispatcher with the existing `AppError → CONFLICT` mapping; structured conflicts surface inline in the renderer. The IPC surface remains `API_VERSION = 1`; new methods are additive.
+- Add the native framed runner (`runtime/providers/native/framed-runner.ts`) plus `ownership-contract.ts` and `createNativeAdapter`. The runner spawns the adapter with `stdio: "pipe"`, wraps stdout in `FrameDecoder`, exposes the same `ProviderHandle` shape as the scripted double, and refuses past-cap stdin writes; the ownership contract runs the version probe from Increment 1 before exposing the adapter and raises `AppError("UNAVAILABLE", …)` on missing binaries or version mismatches. An in-repo `scripts/test-stub-provider.mjs` is the hermetic subprocess for the runner test.
+- Add the in-memory `SpoolGuard` (`runtime/orchestration/spool.ts`) with `reserve` / `commit` / `abort` + a quota gate (8 MiB default); the SQLite-backed implementation will land in Increment 4+ behind the same interface. Add `requestStop` (`runtime/orchestration/stop-policy.ts`) which transitions the run to `cancelled`, writes a `stop.requested` audit event, and blocks future `executeOnce` for the run via a process-global stop flag the orchestrator consults at entry. Add `commitCursor` (`runtime/orchestration/cursor.ts`) which writes the `provider.observation` event, transitions the invocation to its terminal state (`spawned → observing → done | error`), and stamps a `cursor.committed` audit row in one transaction. The invocation schema gains `ended_reason` and the dispatch_intent schema gains `claimed_at`.
+- M3c.1: surface a read-only "managed" review shell so a human can see what M3a/M3b produced. The runtime owns a single `DbWorker` via `openManagedDatabase` (Node 22.12+ `node:sqlite`, with `MINIMAL_RUNTIME_DB=memory` as the test/dev fallback) and `buildManagedProjection(worker)` returns either a populated `ManagedProjection` (task list grouped by `projectId`, runs with per-run invocation counts, invocations, dispatch intents, leases, grants, context receipts, artifacts, closed attention items, and an escaped structured run stream filtered to M3 event types) or a `{available: false, reason}` envelope for `db-closed` / `schema-mismatch`. The `Snapshot` envelope gains an optional `managed` block; existing renderer code treats the absent block identically to the legacy M2 surface. A new topbar `Layers2` toggle swaps the `SessionSidebar` for `ManagedReview` (three columns: task list, task detail, escaped run stream) and persists its on/off state across reloads. No new IPC methods; the verifier executor and review-binding are deferred to M3c.2.
+- M4.1: add the second supported provider (Codex) using the same `ProviderAdapter` port, capability matrix, version-detecting probe, framed runner, and `executeOnce` orchestrator as M3b.3. The new `CodexScriptedProviderDouble` (`runtime/providers/codex-scripted-double.ts`) reports `provider: "codex"` with `featureCount: 4` and surfaces `startup.metadata.scheme = "codex"` + `bidirectionalInput: false` to make the asymmetric capability claim explicit (the M4.1 roadmap forbids claiming symmetric support). The parallel `createCodexNativeAdapter` factory (`runtime/providers/codex-adapter.ts`) refuses the missing-binary and version-mismatch paths with `AppError("UNAVAILABLE", …)` and otherwise reuses `runtime/providers/native/framed-runner.ts`. The framed runner now forwards `started.metadata` from the adapter into `handle.startup.metadata` so the codex asymmetry is observable to the orchestrator without breaking the existing Claude path (whose stub emits no `metadata` and therefore keeps `startup.metadata` absent). A new hermetic stub (`scripts/test-stub-provider-codex.mjs`) drives the runner end-to-end without a real Codex binary on PATH. Fourteen new focused tests cover the scripted-double lifecycle, capability snapshot, distinct startup metadata, native-adapter refusal paths, and the runner's metadata forwarding for both providers. No new IPC methods; the orchestrator, dispatch-intent, and context-receipt surfaces stay at the M3b.2 contract.
+- M4.2: add settings + provider-profile management with effective-value provenance. `runtime/db/effective-settings.ts` introduces a `resolveEffectiveSettings` resolver that merges a stack of layered inputs (defaults → user → project → recipe → run → provider-profile) into a single `Settings` value with full per-field provenance, a composite SHA-256 digest, and per-source native-field preservation (forward-compat: keys the schema does not yet know about land in `nativeFields` instead of being silently dropped). Restrictions **intersect** across layers (the user ∩ project ∩ run set, never a union), per the M4.2 roadmap line. Each layer's digest is computed over `(sourceId, values, restrictions, nativeFields)` so re-binding a layer to a different identity produces a different digest. `buildEffectiveLayer` rejects unknown restriction tokens at construction time so a malformed layer cannot slip past the resolver's per-layer loop. `runtime/db/provider-profiles.ts` introduces the provider-profile entity: definition and activation are distinct operations, profiles never store secret material (the schema is `.strict()` and rejects `apiKey`/`token`/etc.), one profile is active per provider at a time, and `deactivateProviderProfile` returns the previously-active profile for audit. Definition + activation rows live in the existing `meta` table (`provider-profile:<id>` and `provider-profile-active:<provider>`), so no migration is needed. Twenty-seven new focused tests cover precedence ordering, restriction intersection, native-field preservation, digest determinism, sourceId audit-trail divergence, profile definition/activation/deactivation round-trips, secret-shaped field rejection, and cross-provider activation isolation. No new IPC methods; the renderer integration is deferred to a future increment that wires the layer sources (M4.4's installer plan and M4.6's context import).
+- M4.3: introduce the curated local capability catalog with nine distinct kinds — `skill`, `native-plugin`, `mcp-server`, `command`, `script`, `hook`, `context-source`, `environment-template`, `recipe`. `runtime/db/capability-catalog.ts` ships `scanCapabilityCatalog(worker, {capabilitySources, instructionsRoots})`, a read-only scan that classifies existing `preset` rows into `command`, existing `env_profile` rows into `environment-template`, existing `hook` rows into `ReadOnly` `hook`, and uses the M3a native-instructions walker to surface `context-source` capabilities from `AGENTS.md` / `CLAUDE.md` / `.cursorrules` / `README.md` / `CONTRIBUTING.md`. The remaining kinds are populated from caller-supplied directories of JSON manifests so a future M4.4 installer plane can register resources without the catalog shipping its own filesystem conventions. Each `Capability` carries `kind`, `displayName`, `origin`, `scope` (`ReadOnly | UserWritable | RuntimeActivation`), `data`, `digest` (SHA-256 over a canonical JSON of the previous fields), and a deterministic `capabilityId` derived from the digest so rescan stability survives identity regeneration. The scanner never installs, fetches, or mutates anything — the M4.3 roadmap line "no installation occurs merely because a task mentions a tool" is enforced by construction: there is no installer-plane surface in this increment. Unknown kinds raise `AppError("INVALID_REQUEST", …)` at scan input; malformed source manifests are skipped with a `skippedSources` entry rather than silently dropped or surfaced as a row. Seventeen new focused tests cover all nine kinds, digest determinism, source-directory round-trip, unknown-kind rejection, malformed-manifest skipping, read-only invariant (the DB row count is unchanged after a scan), and canonical flatten ordering. No new IPC methods; the M4.4 installer will own the activation state.
+- M4.4: introduce the manifest resolver + installation plan + per-target receipt ledger. `runtime/db/installation-plan.ts` ships `producePlan`, a pure planner that maps a `CapabilityManifest` (manifestId, version, kind, pinned inputs with `expectedDigest` + `origin` + `license` + `requestedPowers[]`, target adapter, dependencies) to an immutable `InstallationPlan` with the five documented lifecycle stages `Approve → InstallInactive → Validate → Activate → Hook` recorded both in the step ordering and as the `stageOrder` array. Pinned digest mismatch raises `AppError("CONFLICT", …)` at plan-assembly time — the runtime never silently proceeds with an unpinned input. Aggregated `pinnedDigests`, `requestedPowers` and `licenses` are deduplicated and sorted so the renderer's pre-install review screen has truthful provenance. `verifyPlanDigest` detects plan mutation by recomputing the SHA-256 over the canonical plan content. `runtime/db/installation-receipt.ts` ships the append-only receipt ledger; every receipt's `reversible` flag is locked to the literal `false` so the M4.4 roadmap line "Rollback never pretends arbitrary install-script side effects are reversible" is enforced by construction. `rollbackPlan` returns a `RollbackSummary` with `sideEffectsReversed: false` literally — the renderer can show a human what actually happened without ever claiming side-effect reversal. `pendingSteps` reports which plan steps have no receipt, supporting future executor dispatch. Fourteen new focused tests cover plan determinism, digest mismatch refusal, lifecycle stage ordering, deduplication, catalog cross-check, plan digest verification, append-only ledger behaviour, the `reversible: false` lock, rollback honesty, and pending-step tracking. No new IPC methods; the M4.4 executor plane is deferred to a future increment so the planner and ledger can stabilise before any real adapter dispatch lands.
+- M4.5: provider-native configuration translation + MCP endpoint identity. `runtime/providers/config-translator.ts` ships `translateProviderConfig`, a pure helper that maps a `.strict()` `ProviderConfig` (`binaryArgs`, `envOverrides`, `workingDirectory`) plus the `(provider, providerVersion, model, accountMode)` triple into an explicit-argv tail + env overrides + cwd. Per-provider argv head (claude: `--provider-version/--model/--account-mode`; codex: `--version/--model`); binaryArgs are blocked from shell metacharacters (`; | & \` $ ( )`) so argv is opaque, and envOverrides keys matching `/^(LD_|DYLD_|NODE_|PYTHON)/` are refused with `INVALID_REQUEST` — those prefixes are the loader-injection vectors cited in the M4 gate, so a misconfigured profile cannot smuggle a loader past the gate. The native framed runner (`runtime/providers/native/framed-runner.ts`) gains a `providerProfile` option that calls the translator and emits the structured argv/env/cwd into `spawn(...)`; translation failure exits the child with code 1 and surfaces a structured `AppError("INVALID_REQUEST", …)` on the lifecycle so the orchestrator can map the failure. The Claude and Codex adapters (`runtime/providers/native/index.ts`, `runtime/providers/codex-adapter.ts`) accept an optional `providerProfile` and thread it through to the runner. `runtime/db/mcp-endpoint.ts` introduces MCP endpoint identity + tool-description/schema snapshots. `MCP_TRANSPORT_REVISION = "2026-07-28"` is hard-coded per the M4 gate ("Pin the actually supported MCP revision"); any other revision raises `INVALID_REQUEST`. `deriveEndpointId(url, transportRevision)` produces a deterministic UUID v4 so the same URL + revision always yields the same identity; `recordEndpointDiscovery` writes a content-addressed snapshot row (`mcp-tool-snapshot:<endpointId>:<snapshotDigest>`) plus an identity row (`mcp-endpoint:<endpointId>`). The snapshot digest is computed over the canonical `(endpointId, transportRevision, tools, snapshotDigest: "")` payload — `capturedAt` is intentionally NOT part of the canonical input so re-recording identical tools yields the same digest (drift detection compares tool sets, not capture moments). `runtime/db/mcp-authority.ts` introduces the authority gate: `computeAddedPowers(snapshot)` returns the empty-baseline diff (the snapshot's tool names); `approveEndpointSnapshot` flips the identity row's `approvedSnapshotDigest` (refusing snapshot digests not present in the ledger, refusing unknown endpointIds); `isEndpointAuthorized` returns true iff a snapshot has been approved; `isPowerAuthorized` returns a structured reason enum (`no-endpoint | no-snapshot | no-grant | grant-pending | grant-denied | power-unlisted | ok`) so the renderer can render a specific refusal message without re-deriving it. Power `P` is authorised for endpoint `E` iff (a) the approved snapshot lists `P` as a tool name AND (b) an `"authority"` grant exists for `E` in state `"approved"` with `scopeJson.addedPowers` containing `P`. `refreshEndpointDiscovery` produces a pure structural diff (`addedTools`, `removedTools`, `changedTools`) without mutating storage so a future MCP transport can call it on every discovery tick. Twenty-four new focused tests (8 translator + 9 endpoint + 13 authority; two extension cases in `codex-adapter.test.ts` and `codex-framed-runner.test.ts`) cover argv translation per provider, shell-metachar/loader-key blocklists, schema strictness, endpoint-id determinism, transport-revision refusal, idempotent re-record, snapshot ordering, added-powers diff, drift detection (unchanged + drift with added/removed/changed), and every reason path in `isPowerAuthorized`. No new IPC methods, no new schema columns, no new renderer; the trust model + snapshot ledger are the contract a future M5/M6 increment can plug real MCP transports into without re-deriving the authority gate.
+- M4.6: context-source import + bounded memory views + handoffs. Four new modules close the third M4 bullet ("Add context-source import, selected revision updates, and bounded session/terminal/task memory views from existing history. Handoffs contain objective, verified state, artifacts, remaining decisions/resources and next action. Cross-provider transfer is a new scoped brief; hidden native state and full transcripts are not translated by default."). `runtime/db/context-import.ts` ships `importContextSource(worker, {taskId, runId, source, importedBy})` — content-addressed audit rows in the existing `meta` table under `context-import:<runId>:<source.digest>`. When `source.content` is supplied the function re-derives `sha256(content)` and refuses a mismatch with `CONFLICT` so a mis-pinned source cannot land in the receipt ledger; the `payloadDigest` excludes `importedAt` so an identical re-import produces an identical digest (audit rows are content-addressed by `(runId, sourceId, origin, digest, bytes, importedBy)`, not by capture moment). `runtime/db/revision-update.ts` ships `recordRevisionUpdate(worker, {runId, baseRevision, headRevision, sourceDigest, rationale, actor})` — per-run audit rows in the meta table under `revision-update:<runId>:<seq>`. Re-binding the same `(runId, baseRevision)` pair to a **different** `sourceDigest` raises `CONFLICT` (identity is the audited property; swapping it is a tamper attempt); re-binding to the **same** `sourceDigest` with a different `headRevision` is allowed (the normal "rebase onto a newer head from the same source identity" flow). `readCurrentRevision(worker, runId)` reads the run's `base_revision` column pointer; `listRevisionUpdates` returns audit rows in ascending `seq`. `runtime/db/memory-views.ts` ships three pure projections with explicit caps: `viewSessionMemory(worker, {sessionId, maxTasks, maxRunsPerTask, maxInvocationsPerRun, maxAttentionItems})`, `viewTaskMemory(worker, {taskId, maxRuns, maxInvocationsPerRun, maxAttentionItems, maxArtifacts})`, and `viewTerminalMemory(worker, {terminalUuid, maxLines})`. Caps are clamped to `MEMORY_VIEW_MAX_RUNS_PER_TASK = 64`, `MEMORY_VIEW_MAX_INVOCATIONS_PER_RUN = 64`, `MEMORY_VIEW_MAX_ATTENTION_ITEMS = 256`, `MEMORY_VIEW_MAX_ARTIFACTS_PER_RUN = 64`, `MEMORY_VIEW_MAX_TERMINAL_LINES = 4096`, `MEMORY_VIEW_MAX_TASKS_PER_SESSION = 64`; passing `0` or negative raises `INVALID_REQUEST` so a caller cannot accidentally request an unbounded slice. Each view returns `{kind, cap, data, digest}` where `digest = SHA-256(stableStringify(data))`, covering the **bounded** payload so a renderer can detect a content change without re-rendering. Terminal-history lines are stored in the meta table under `terminal-history:<terminalUuid>:<seq>`; `appendTerminalHistory(worker, {terminalUuid, stream, content})` is the writer seam for future M5+ IPC handlers. `runtime/db/handoff.ts` ships `buildHandoff(worker, {runId, targetProvider?, targetModel?, targetAccountMode?, maxArtifacts?, maxInvocations?, maxAttentionItems?, crossProvider?})`. The handoff envelope carries `runId`, `capturedAt`, `sourceRevision`, `targetRevision`, `crossProvider: boolean`, `objective` (already redacted via the receipt path), `verifiedState: {passed, failed, uncertain, skipped}`, `artifacts[]`, `remainingDecisions[]` (open `decision` attention items), `remainingResources[]` (non-expired artifacts), `nextAction`, and a literal `excludes: {nativeState: true, transcripts: true}` field. `nextAction` is computed deterministically from `run.status`: `cancelled` ⇒ `"stop"`, `queued/running` ⇒ `"continue"`, `completed/failed` with open decisions ⇒ `"handoff"`, otherwise `"new-attempt"`. The literal `excludes` record is enforced by Zod's `.literal(true)` on both keys so a future renderer cannot accidentally omit the field — the roadmap line "hidden native state and full transcripts are not translated by default" is enforced by construction. Caps are clamped to `HANDOFF_MAX_ARTIFACTS/INVOCATIONS/DECISIONS/RESOURCES = 64`. The `crossProvider` flag is informational; the renderer decides whether to actually invoke the cross-provider flow. Thirty-eight new focused tests (7 context-import + 8 revision-update + 14 memory-views + 9 handoff) cover idempotent re-import with re-derived digest mismatch (CONFLICT), digest mismatch on bytes mismatch (INVALID_REQUEST), unknown runId rejection, non-context-source kind rejection, audit-row sequencing + meta-key collision, re-binding protection (same baseRevision ⇒ CONFLICT for new sourceDigest; same sourceDigest ⇒ allowed for new headRevision), empty-field refusal, view-session grouping by `projectId === sessionId`, terminal-history append monotonic seq, view-terminal memory bounded by `maxLines` (clamp + 0/negative rejection), view-task memory bounded by `maxRuns/maxInvocations/maxAttention/maxArtifacts`, deterministic digests, content-change detection, terminal-history-appended digest change, handoff `nextAction` for every status (succeeded+no-decisions ⇒ new-attempt; succeeded+open-decisions ⇒ handoff; cancelled ⇒ stop; queued ⇒ continue), `crossProvider: true` + always-literal `excludes`, unknown-runId NOT_FOUND, and cap clamping. No new IPC methods, no new schema columns, no new renderer; the import + revision + bounded views + handoff are the contract a future M5/M6 increment can plug renderer-aware context-import flows and cross-provider handoff bridges into without re-deriving the trust model.
+- M4.7: runtime hook execution with event/revision identity, scoped inherited authority, deadlines, output limits, recursion bounds and failure policy. Closes the final M4 bullet ("Define runtime hook execution with event/revision identity, scoped inherited authority, deadlines, output limits, recursion bounds and failure policy. Execute after commit through the same admission/execution machinery. Renderer notify/open-file triggers and native provider hooks retain separate semantics. Existing stored hook definitions stay inactive until reviewed and activated."). `runtime/db/hook-activation.ts` ships `activateHook(worker, {hookId, principal, authorityGrantId})` / `deactivateHook(worker, {hookId, principal})` / `isHookActive(worker, hookId)` / `listActiveHookIds(worker)` — content-addressed activation rows in the existing `meta` table under `hook-activation:<hookId>` carrying `{hookId, activatedBy, authorityGrantId, hookKind, activatedAt, payloadDigest}`. The `payloadDigest` covers `(hookId, activatedBy, authorityGrantId, hookKind)` and **excludes** `activatedAt`, so an identical re-activation produces an identical digest (drift detection compares authority, not capture moment). Activation refuses `NOT_FOUND` for an unknown `hookId`; refuses `FORBIDDEN` for a missing authority grant, a non-`approved` grant, a grant whose `scope_json.hookKinds` does not cover the hook's `action.type`, a grant without a `decidedBy`, a grant whose requester principal matches the activator (no self-activation), and a grant whose `decidedBy` differs from the activator — the anti-self-approval rule from `runtime/db/grants.ts` is enforced at the activation seam. The legacy `hook.enabled` column stays advisory; absence of the meta row is the authoritative "inactive" state. `runtime/orchestration/hook-execute.ts` ships `executeHook(worker, input)` and `fireHookForEvent(worker, input)`. Caps are explicit and clamped: `HOOK_DEADLINE_MS = 5000`, `HOOK_OUTPUT_MAX_BYTES = 65536`, `HOOK_MAX_RECURSION_DEPTH = 4`, `HOOK_MAX_INFLIGHT = 32`. Passing `0` / negative `deadlineMs` or `outputByteCap` raises `INVALID_REQUEST`; caller-supplied values above the max clamp silently to the max. Inherited authority is narrowed: a hook executing **inside** a managed context (`taskId` supplied) inherits authority from the task's `approved` `authority` grants — the intersection of their `scope_json.hookKinds`; a hook firing **outside** a managed context refuses `run-command-in-terminal` (no shell without authority) and permits `notify` always, `open-file` only with a path-covering grant. `executeHook` increments a process-global `inflight` counter and a `recursionDepth` keyed by `(eventType, eventSeq)`, refuses `throttled` past `HOOK_MAX_INFLIGHT`, refuses `recursion` past `HOOK_MAX_RECURSION_DEPTH`, and decrements on every return path. `notify` writes a `notify:<eventSeq>:<hookId>` meta row; `open-file` writes an `open-file:<eventSeq>:<hookId>` meta row with the schema's path refinement applied; `run-command-in-terminal` spawns the command in-process with explicit argv, a captured `stdout`/`stderr` buffer, and a deadline-via-`AbortController`. The output byte cap aborts with `output-cap` once the captured bytes exceed the cap; the deadline aborts with `timeout`; a non-zero exit aborts with `exit-error` carrying the exit code in `failureMessage`. Every persisted record (activation row, `hook-fired` audit row, `hook.failed` audit row, `notify:` / `open-file:` meta row) carries a SHA-256 `payloadDigest` computed via `runtime/db/effective-settings.ts:stableStringify`. `fireHookForEvent` lists the activation-gated hook set, runs each match sequentially (so the inflight / recursion bounds are shared process state), collects outcomes, records one `hook-fired` audit event per fired hook (`origin_hook_id = hookId`), one `hook.failed` audit event per refused hook, and one `attention_item(kind: "hook-failure")` row per refusal so the M3c.3 inbox surfaces the failure with the existing dedupe model. The `attentionItemViewSchema` and `transitionAttentionResultSchema` `kind` enums gain `"hook-failure"`; the `API` wire shape (`shared/types.ts`) extends the four attention-return signatures with the new kind, and the renderer-side attention inbox (M3c.3) consumes the new kind without further work. The IPC surface remains `API_VERSION = 1`; no new IPC methods, no new schema columns, no new renderer — renderer notify / open-file triggers and native provider hooks (Claude / Codex) retain separate semantics per the M4.7 roadmap line. Twenty-one new focused tests (6 activation + 15 execute/dispatch) cover digest determinism, NOT_FOUND on unknown hookId, FORBIDDEN on missing / non-approved / wrong-scope / self-activating grants, deactivate idempotency + `listActiveHookIds` exclusion, `inactive` outcome for unactivated hooks, `notify` meta + audit emission, `run-command-in-terminal` output-cap / timeout / exit-error paths with approved grants, inflight / recursion bound invariants, `forbidden` without authority, `open-file` path-restriction refusal, `fireHookForEvent` mixed-outcome collection, INVALID_REQUEST on `deadlineMs = 0` / `outputByteCap = -1`, cap clamping, and audit events carrying `origin_hook_id` + content-addressed `payloadDigest`.
+- M5.1: narrow management CLI/MCP facade over the same runtime API. Opens the first M5 bullet ("Expose a narrow management CLI/MCP facade over the same runtime API: scoped inventory/status/artifact reads first, then typed task/run creation and stop; enable recipe requests when M6 lands. Bind principals to connections; an agent-supplied project ID never enlarges access. Keep raw unrestricted shell/keystroke administration out of the agent tool surface."). New `runtime/mcp/facade.ts` ships `mcpListTasks(worker, context, filter?)`, `mcpReadTask(worker, context, taskId)`, `mcpListRuns(worker, context, taskId)`, `mcpReadRun(worker, context, runId)`, `mcpListArtifacts(worker, context, filter?)`, `mcpPreviewArtifact(worker, context, artifactId, scopeJson?)`, `mcpCreateTask(worker, context, input)`, and `mcpRequestStop(worker, context, {runId, reason, requestedBy?})`. Every method takes a `McpContext = {principal, projectIds[]}` (Zod `.strict()`-validated: `principal` 1-256 chars, `projectIds` 1-64 non-empty strings). The trust model is principal-bound + project-narrowed + never enlarged by agent-supplied identifiers: a helper `requirePermittedProject(ctx, resolvedProjectId, action)` throws `AppError("FORBIDDEN", …)` carrying a content-addressed `refusal-digest` whenever the resolved row's project id is not in `ctx.projectIds`, so even a perfectly-crafted agent-supplied `projectId` cannot bypass the principal's permitted set. Read paths return bounded summaries (`mcpTaskSummarySchema` / `mcpRunSummarySchema` / `mcpInvocationSummarySchema` / `mcpArtifactSummarySchema` all cap distinct row counts; `mcpListTasks` also surfaces a `deniedProjectIds` array so an audit log can still see which projects the agent attempted to enumerate); `mcpPreviewArtifact` delegates to the existing M3c.3 grant gate after the project gate, so a permitted-project artifact is still refused without an `approved` `grant` row for `(principal, sha256)` whose `scope_json.artifactKinds` includes the row's kind. Write paths return a structured `{kind: "ok", …} | {kind: "forbidden", reason}` envelope (never `AppError`); `mcpRequestStop` adds `kind: "not-found"` for unknown runIds. The facade deliberately omits every raw shell / keystroke administration method (`attach`, `input`, `cancel-input`, `rename-terminal`, `delete-terminal`, `launch-terminals`, `create-terminals`, file operations, settings/preset/env-profile management) — a future increment may add a strictly-bounded `attachTerminal` for read-only observability, but the present facade is a *management* surface, not a *control* surface. Recipe requests are deferred to M6 per the M5.1 roadmap line "enable recipe requests when M6 lands". New `shared/mcp-schema.ts` ships the Zod input/result schemas + TypeScript types so a future CLI/MCP transport can wire the dispatcher against `McpContext` without re-deriving the trust model. Eighteen new focused tests in `tests/runtime/mcp-facade.test.ts` cover: list-tasks filters by permitted set + records deniedProjectIds; read-task / list-runs / read-run refuse cross-project rows with FORBIDDEN; mcpListArtifacts scopes by task project; mcpCreateTask refuses out-of-set project and succeeds when permitted; agent-supplied projectId in permitted set but principal-bound forbidden (the "never enlarges access" invariant — supplying `"alpha"` against a `["beta"]` context still refuses); mcpRequestStop refuses cross-project run and succeeds on a permitted-project run (flipping the run to `cancelled`); mcpPreviewArtifact requires both the project gate AND the M3c.3 grant gate; empty principal / empty projectIds are rejected by schema validation before any DB read. The IPC surface remains `API_VERSION = 1`; no new IPC methods — the existing `ProtocolDispatcher` will accept facade methods in a future transport-wiring increment without touching the desktop auto-forward loop.
+- M5.2: lead-proposed bounded work items + parallel admission limits. Opens the second M5 bullet ("A selected Codex/Claude lead proposes bounded work items and dependencies. Validate them using the normal task/grant/admission path. Start with two active managed runs globally and one managed writer per checkout; expose project/provider/host limits. Child authority, expiry, depth and allowance can only narrow."). New `runtime/orchestration/lead-admission.ts` ships `admitLeadProposal(worker, proposal, options)`, `readLeadAdmissionLimits(worker)`, and `readLeadAdmissionStatus(worker)`. New `shared/lead-admission-schema.ts` ships `leadWorkProposalSchema` (`context + items[] + dependencies[] + grants[]`, all `.strict()`-validated with hard caps: ≤ 64 items, ≤ 256 dependencies, ≤ 128 grants), `leadAdmissionLimitsSchema` (`globalMaxActiveManagedRuns`, `perCheckoutMaxActiveWriters`, plus per-project / per-provider / per-host cap maps), `leadAdmissionStatusSchema` (live counts + caps), and the `leadAdmitResultSchema` union (`{kind: "ok"} | {kind: "conflict"} | {kind: "busy", trippedLimit} | {kind: "forbidden"}`). Constants: `DEFAULT_MAX_ACTIVE_MANAGED_RUNS_GLOBAL = 2`, `DEFAULT_MAX_MANAGED_WRITERS_PER_CHECKOUT = 1`, `MAX_GRANT_DEPTH = 4`. The admission gate enforces (in order): (1) schema parse + duplicate-localId rejection, (2) dependency-graph validation (no self-loops, no cycles via reachability fixpoint), (3) global active-run cap (`BUSY, trippedLimit: "global-max-active-managed-runs"` when at-or-above the cap), (4) per-checkout writer cap (active leases for the host; `BUSY, trippedLimit: "per-checkout-writers"`), (5) per-project / per-provider / per-host caps, (6) child grant narrowing against the parent task's approved grants (scope subset, restrictions subset, digests subset — `FORBIDDEN` with a precise reason when the child tries to broaden the parent), (7) depth chain limit (depth = parent.depth + 1, refused when it would exceed `MAX_GRANT_DEPTH`). Child lineage lives in the meta table under `parent-task:<childTaskId>` → `<parentTaskId>` and `grant-depth:<grantId>` → `{depth, parentGrantId}`. The `requestedBy` / `decidedBy` anti-self-approval rule from `runtime/db/grants.ts` carries through unchanged: the `admitLeadProposal` admit path takes an `options.deciderOverride` (default `"system"` when the principal isn't `"system"`) so a lead-proposed grant can be approved immediately, but never by the requester principal. Sixteen new focused tests in `tests/runtime/orchestration-lead-admission.test.ts` cover readLeadAdmissionLimits / readLeadAdmissionStatus with active-run counting; admit happy path (one item, zero grants); self-dependency / cycle / unknown-localId rejection at the schema gate; BUSY at the global active-run cap (2); BUSY at the per-checkout writer cap (held lease for the host); FORBIDDEN for grants whose scope / restrictions / digests broaden the parent; depth ≤ MAX_GRANT_DEPTH (refuses when depth would exceed the cap; admits when below it); parent-task meta key written when `context.parentTaskId` is set; duplicate-localId rejection; 64-item cap; unknown-parentGrantId refusal. The IPC surface remains `API_VERSION = 1`; no new IPC methods. Child-run spawning and recipe requests are deferred to a later M5 increment — the present seam admits the proposal + grants only, validating the trust model before the dispatch path grows.
+- M5.3: per-layer dispatch policy + native-child observation. Opens the third M5 bullet ("Choose one dispatcher at each layer. Use native subagents for supported internal work; use managed child runs for separate providers/workspaces/hosts. Count observable native children and disclose observation gaps. Disable ungovernable native delegation where a hard budget is required; prompts cannot enforce process quotas."). New `runtime/orchestration/delegation-policy.ts` ships `readDelegationLimits(worker)` (reads `delegation-limits:global` meta key, falls back to defaults), `readDelegationStatus(worker, limits)` (live counts grouped by observable-vs-advisory level + per-provider + `ungovernableProviders` list), `decideDispatch(input)` (pure 10-step decision tree returning `{kind: "native-subagent", chosenObservation} | {kind: "managed-run", reason} | {kind: "forbidden", trippedPolicy, reason}`), `recordNativeChildObservation(worker, input)` (writes two meta-key rows transactionally: `native-child-pid:<invocationId>:<seq>` always; `native-child-pgid:<invocationId>:<seq>` only when `pgid` was captured — both with content-addressed SHA-256 `payloadDigest` computed via `runtime/db/effective-settings.ts:stableStringify` and excluding `observedAt` so identical re-observations produce identical digests), `listNativeChildrenForInvocation(worker, invocationId)`, and `observationFromEvent(event)` (maps `pid-and-pgid-captured → fully-observed`; `pid-only-captured | pgid-only-captured → pid-only`; `pid-unknown | pid-rejected → unobservable`). Constants: `DEFAULT_MAX_OBSERVABLE_NATIVE_SUBAGENTS_GLOBAL = 4`, `DEFAULT_MAX_OBSERVABLE_NATIVE_SUBAGENTS_PER_INVOCATION = 2`; `DEFAULT_OBSERVABLE_LEVELS_FOR_CAP = ["fully-observed"]` and `DEFAULT_HARD_BUDGET_REQUIRED_OBSERVATION_LEVELS = ["unobservable", "provider-internal"]` are frozen read-only arrays. The dispatch tree enforces the M5.3 lines: (1) `allowNativeSubagents: false` → forbidden / `native-subagents-disabled`; (2-4) cross-workspace / cross-host / cross-provider → managed-run (same `(providerVersion, workspaceId, hostId)` triple is the only native-subagent case); (5) provider does not advertise `supported: true` → managed-run; (6) `hardBudgetRequired: true` and `defaultObservation ∈ hard-budget-required list` → forbidden / `hard-budget-required`; (7) `hardBudgetRequired: true` and `defaultObservation === "unobservable"` → forbidden / `no-observable-native-children` (more specific than step 6); (8-9) global / per-invocation observable cap reached → managed-run; (10) otherwise → `native-subagent`. New `shared/delegation-schema.ts` ships `nativeChildObservationLevelSchema` (`fully-observed | pid-only | unobservable | provider-internal`), `nativeChildObservationEventSchema`, `nativeSubagentSupportSchema` (`{supported, defaultObservation, capturesPgid}`, all `.strict()`), `delegationLimitsSchema` (with `observableLevelsForCap`, `perProviderMaxObservableNativeSubagents`, `hardBudgetRequiredObservationLevels`), `delegationStatusSchema`, `dispatchDecisionSchema` (`discriminatedUnion` on `kind`), `delegationPolicyInputSchema`, `recordNativeChildObservationInputSchema`, and `nativeChildObservationRecordSchema` (carries the content-addressed `payloadDigest`). Additive matrix extensions: `AdapterCapabilities.nativeSubagentSupport?: NativeSubagentSupport` (defaults absent ⇒ `{supported: false}`); `CapabilityMatrix.native` adds `nativeSubagentSupport?: NativeSubagentSupport` (optional on both union variants so existing test stubs keep parsing); `extendNativeCapabilities` returns `{claude, codex, version, featureCount, nativeSubagentSupport}` where claude advertises `{supported: true, defaultObservation: "fully-observed", capturesPgid: true}` and codex advertises `{supported: false, defaultObservation: "pid-only", capturesPgid: false}` (M4.1 asymmetry is preserved). Additive runner change: `framed-runner.ts` captures `child.pid` and — on Linux + macOS — the `pgid` from `/proc/<pid>/stat` field 5 (`tpgid`); the returned `ProviderHandle` now carries an optional `nativeProcess: {pid, pgid, observation: "fully-observed" | "pid-only"}` so callers can ask the runner for a verifiable child identity at dispatch time. Existing callers (M3b.3's `execute-once.ts`) ignore the new field; no IPC shape change. The Codex factory (`runtime/providers/codex-adapter.ts`) populates `nativeSubagentSupport: {supported: false, …}`; the Claude factory (`runtime/providers/native/index.ts`) populates `nativeSubagentSupport: {supported: true, …}`. Fourteen focused tests in `tests/runtime/orchestration-delegation-policy.test.ts` cover readDelegationLimits defaults, readDelegationStatus (empty / populated / ungovernable-provider detection), decideDispatch for every branch (native-subagent happy path, cross-workspace/cross-host/cross-provider managed-run, three forbidden paths with distinct `trippedPolicy` enums, two cap-reached managed-run paths), recordNativeChildObservation (pid-only + pgid, deterministic payloadDigest, missing-pgid tolerance via the meta-key naming convention), and observationFromEvent (all five event variants → documented level mapping). The IPC surface remains `API_VERSION = 1`; no new IPC methods. Renderer / IPC integration is deferred to a later M5 increment (consistent with M5.1 / M5.2's pattern). The dispatch path actually calling `executeOnce` for the managed-run fallback is also deferred — M5.2 already produces managed child runs; M5.3 only decides which path to use.
+- M5.4: candidate integration + workspace promotion. Opens the fourth M5 bullet ("Integrate completed changes into a distinct candidate workspace. Serialize shared Git mutations, verify the combined result and recheck the target base at promotion. Use expected-old-ref operations where applicable, and never update a checked-out branch behind its files. Dirty work, submodules, LFS/filter behavior and shared ports/services need explicit support or visible refusal."). New `runtime/orchestration/candidate-integration.ts` ships `withIntegrationLock(worker, repoDir, holder, body)` (acquires / releases the per-`repoDir` mutex row `integration-git-lock:<repoDir>` in `meta` with `DEFAULT_INTEGRATION_LOCK_TTL_MS = 60_000`; refuses `BUSY` when held by a non-expired other row; releases on `try/finally` even when the body throws); `prepareIntegration(worker, input)` (validates the request, walks each `taskId`'s most-recent workspace, materialises a fresh `git worktree add --detach <integrationWorktreePath> <targetBase>` against the supplied base, detects submodules / LFS paths / smudge/clean filters / shared-service paths via the integration worktree's `.gitattributes` + `SHARED_SERVICE_PATH_PATTERNS` allowlist, runs `git -C <integrationWorktreePath> merge --no-ff <memberHeadSha>` per member in deterministic taskId order, computes the combined tree SHA + diff, refuses `CONFLICT` with the offending files in the payload when any merge has conflicts — NEVER auto-resolves — and persists the immutable `IntegrationPlan` under `integration-plan:<integrationId>` plus the inverse index `integration-by-base:<targetBase>:<integrationId>`, both with a content-addressed SHA-256 `payloadDigest` computed via `runtime/db/effective-settings.ts:stableStringify` and excluding `createdAt` / `verificationId` / `reviewId`); `readIntegrationPlan(worker, integrationId)`; `promoteCandidate(worker, input)` (atomic CAS promotion: resolves the live `targetBranch` SHA via `git rev-parse`, refuses `conflict` with `reason: "expected-old-ref-mismatch"` when the SHA differs from `expectedOldBase`, refuses `conflict` with `reason: "dirty-worktree"` when the branch is checked out at a worktree whose `status --porcelain` is non-empty, accepts only fast-forward promotions onto a checked-out branch via `git -C <worktreePath> merge --ff-only <combinedTree>`, otherwise uses `git update-ref <targetBranch> <combinedTree> <expectedOldBase>` — never `--force`, never `git push` — and writes `integration-promotion:<integrationId>` plus `promotion-by-base:<expectedOldBase>:<integrationId>` with `payloadDigest` excluding `promotedAt`); `rollbackIntegration(worker, integrationId, decider)` (marks the integration's plan as superseded via `integration-superseded:<integrationId>`, refuses `FORBIDDEN` when the integration has already been promoted). Constants: `DEFAULT_INTEGRATION_LOCK_TTL_MS = 60_000`, `DEFAULT_INTEGRATION_TIMEOUT_MS = 30 * 60_000`, `DEFAULT_INTEGRATION_MAX_MEMBERS = 16`. Meta-key prefixes: `integration-plan:`, `integration-by-base:`, `integration-git-lock:`, `integration-promotion:`, `promotion-by-base:`, `integration-superseded:`. New `shared/integration-schema.ts` ships `commitShaSchema`, `integrationMemberSchema`, `integrationPlanRequestSchema` (with `.refine(...)` requiring `recipeId` OR `command`), `integrationPlanSchema`, `promoteCandidateRequestSchema`, `promoteCandidateResultSchema` (5-member `discriminatedUnion`: `ok | conflict | forbidden | not-found | busy`), `gitLockRecordSchema`, `rollbackIntegrationResultSchema` — all `.strict()`. `SHARED_SERVICE_PATH_PATTERNS` is a frozen read-only array (`/etc/systemd/`, `/etc/init.d/`, `/Library/LaunchDaemons/`, `/Library/LaunchAgents/`, `/services/`) so future renderer integrations can render "this integration flagged N shared-service paths" without re-deriving the pattern. Fifteen focused tests in `tests/runtime/orchestration-candidate-integration.test.ts` cover withIntegrationLock (BUSY on contention, expired-TTL acquisition, throw-release invariant), prepareIntegration (empty/oversized `taskIds`, missing recipeId+command, NOT_FOUND for unworkspaceed tasks, content-addressed `payloadDigest` determinism, submodule FORBIDDEN refusal, smudge-filter / shared-service-path warning capture), promoteCandidate (not-found for unknown plan, expected-old-ref-mismatch, dirty-worktree refusal, fast-forward success + meta-row persistence + inverse `promotion-by-base:` index), and rollbackIntegration (FORBIDDEN after promotion). The IPC surface remains `API_VERSION = 1`; no new IPC methods. Renderer / IPC integration of `prepareIntegration` / `promoteCandidate` is deferred to a future transport-wiring increment that wires the M5.1 facade's management methods to the orchestrator. Cross-host promotion, real submodule / LFS / filter support, and resumable-after-conflict integration remain future-increment concerns.
+- M5.5: attachment registry with per-view generations + bounded observers. Opens the fifth M5 bullet ("Implement an attachment registry with per-view generations, output subscriptions/byte credits and one interactive/resize owner per terminal. Bound slow observers independently so one mirror cannot freeze another. Stale detach/resize/input cannot control a replacement attachment. Reuse the terminal-owned input queue from M1."). New `runtime/orchestration/attachment-registry.ts` ships `createAttachmentRegistry(worker, deps?)` returning a registry with `registerAttachment`, `unregisterAttachment`, `publishOutput`, `requestResize`, `sendInput`, `acknowledgeOutput`, `transferOwnership`, `replenishByteCredits`, `enforceOwnershipHandover`, `readStatus`, and a `__debugSnapshot` test seam. Per-subscriber `generation` (1..1024) is monotonic; every `detach` / `resize` / `input` carries an `expectedGeneration` and the registry refuses `kind: "conflict", reason: "expected-generation-mismatch: live=N expected=M"` when the supplied counter is stale, so the spec line "stale detach/resize/input cannot control a replacement attachment" is enforced by construction. Exactly ONE subscriber is the interactive/resize owner per terminal at any time; a second owner registration refuses `kind: "conflict", reason: "owner-already-set"` unless a valid `surrenderToken` is supplied. Owner-only paths: `requestResize` (`forbidden, reason: "resize-owner-only"` for non-owners), `sendInput` (delegates to the M1 `TerminalInputQueue` from `runtime/input-queue.ts` — refuses `forbidden, reason: "input-owner-only"` for non-owners; `busy` when the queue is full; the queue's `cancel` is invoked on owner-detach so unsubmitted bytes are dropped for THAT owner only), and `replenishByteCredits`. Output is fanned out via per-observer `BudgetedWriter`s (the M3b.2 watermark pair, `LOW_WATERMARK = 64 KiB`, `HIGH_WATERMARK = 256 KiB`): a slow observer's outstanding bytes crossing the high watermark pauses ONLY that observer's `pausedReason = "high-watermark"`; the other observers and the publisher continue to drain. Each subscription is born with `initialByteCredits` (default `DEFAULT_OBSERVER_BYTE_CREDITS = 4 * 1024 * 1024` for observers, `DEFAULT_OWNER_BYTE_CREDITS = 64 * 1024 * 1024` for owners); `publishOutput` decrements credits per call and marks the subscription `pausedReason: "byte-credit-exhausted"` when `remainingByteCredits < dataBytes`. `transferOwnership({terminalUuid, fromSubscriberId, toSubscriberId, surrenderToken, toExpectedGeneration})` requires the supplied `surrenderToken` to match the current owner's row (refuses `forbidden, reason: "surrender-token-mismatch"` otherwise), rotates the token via `crypto.randomBytes(32)`, increments the new owner's generation, cancels all pending input from the prior owner, and writes `attachment-ownership:<terminalUuid>` with the rotated token + generation. `enforceOwnershipHandover(terminalUuid)` implements the spec's "auto-detach on owner drop" line: when the owner has been detached for `OWNERSHIP_HANDOVER_TIMEOUT_MS = 5_000`, every observer is detached, the subscription meta rows are deleted, and an immutable `attachment-registry-abandoned:<terminalUuid>` row is written so a future attach on a different peer starts fresh. Persistence: every `attachment-subscription:<terminalUuid>:<subscriberId>` and `attachment-ownership:<terminalUuid>` row carries a content-addressed SHA-256 `payloadDigest` computed via `runtime/db/effective-settings.ts:stableStringify`, excluding volatile fields (`subscribedAt`). New `shared/attachment-schema.ts` ships `subscriberKindSchema`, `attachRoleSchema`, `registerAttachmentInputSchema`, `subscriptionStateSchema`, `publishOutputInputSchema`, `requestResizeInputSchema`, `sendInputInputSchema`, `transferOwnershipInputSchema`, `acknowledgeOutputInputSchema`, `unregisterAttachmentInputSchema`, `replenishByteCreditsInputSchema`, and `attachmentRegistryStatusSchema` — all `.strict()`. The new schemas + factory + cap constants are re-exported from `runtime/orchestration/managed-actions.ts` so the M5.1 facade's future `mcpAttachTerminal`-style methods can import the registry from a single surface. Additive settings allowlist entries: `attachmentRegistryReplayBufferBytes`, `attachmentRegistryByteCreditsDefault`, `attachmentRegistryOwnershipHandoverTimeoutMs`. Fourteen focused tests in `tests/runtime/orchestration-attachment-registry.test.ts` cover registerAttachment (owner happy path, conflict on second owner without surrenderToken, observer happy path), unregisterAttachment (stale-generation refusal, owner-input cancellation on detach), publishOutput (every-subscriber delivery + credit decrement, slow-observer high-watermark pause, slow observer does NOT block other subscriptions), requestResize (forbidden for non-owners, owner call with expected generation bumps `newGeneration`), sendInput (admits bytes to the owner's `TerminalInputQueue`), transferOwnership (forbidden on surrender-token mismatch, success + generation bump + prior-owner cancellation), and enforceOwnershipHandover (detached owner past timeout ⇒ every observer dropped + `attachment-registry-abandoned:<terminalUuid>` row written). The IPC surface remains `API_VERSION = 1`; no new IPC methods. Renderer / IPC integration of the registry is deferred to a future transport-wiring increment (consistent with M5.1 / M5.2 / M5.3 / M5.4's pattern); the registry is a service consumed by the M5.1 facade seam. The existing `RuntimeWorkspace.attach` single-attachment handler is preserved as-is for this increment — wiring `workspace.ts` to delegate to the registry is the natural follow-up.
+- M5.6: two-pane workspace + lifecycle semantics + command palette + project-metadata IPC. Opens the sixth M5 bullet ("Deliver a two-pane vertical workspace with tabs per pane, predictable close/focus behavior, keyboard splitter and saved layout. Distinguish hide view, stop/remove terminal and delete retained history. Add a command palette for sessions, terminals, presets, tasks, explorer, settings, hooks and memory; expose project tags/archive/color/description already supported by records."). New `runtime/orchestration/terminal-lifecycle.ts` ships `hideTerminal(worker, input)` (registry row untouched + new `terminal.hidden_at` column set; UI hides the tab), `stopAndRemoveTerminal(worker, input, {inputQueue?})` (detaches via the M5.5 input-queue `cancel`, sets `terminal.removed_at`, retains history), and `deleteRetainedHistory(worker, input)` (refuses `decider: "system"` with `FORBIDDEN`, hard-deletes `terminal_history` + `terminal_meta` + `terminal` rows keyed by the terminalUuid, emits a SHA-256 `auditDigest` over `{terminalUuid, linesDropped, decider, ts}`). `ensureLifecycleColumns(worker)` adds `hidden_at` + `removed_at` columns idempotently; `withTerminalLock(terminalUuid, fn)` serializes concurrent lifecycle ops per terminal. The new `terminalLifecyclePolicySchema` accepts `hide | stop-and-remove | delete-history | graceful`; `resolveTerminalLifecyclePolicy` aliases `graceful → stop-and-remove` for backward compatibility so the legacy `delete-terminal` IPC keeps working. New `runtime/orchestration/layout.ts` ships `migrateLayoutV2toV3` (adds empty `layouts: {}` + bumps `version` to `3`), `hydrateLayouts` (parses each entry through `savedLayoutSchema.strict()` + drops malformed rows with `console.warn`), `digestLayout(sessionId, split, top, bottom)` (SHA-256 over the canonical projection EXCLUDING volatile `updatedAt` / `layoutDigest` themselves, so identical state → identical digest), and `serializeLayouts` for the `WorkspaceState.layouts[sessionId]` Map. `WorkspaceState` gains `saveLayout` / `readLayout` / `clearLayout` (persisted via the existing `Store.save` atomic-write pattern; `saveLayout` validates `split.ratio ∈ [0.1, 0.9]` and refuses empty layouts when `split.enabled` is true). Twelve new IPC methods land in `src/shared/protocol.ts` (every entry is wrapped in a single-element tuple to match the M3c.5 convention; the runtime routes them through the existing auto-forward loop in `src/main/index.ts:124-137` with NO new `dispatcher.register` calls): `update-session-metadata`, `save-env-profiles`, `save-hooks`, `view-session-memory` / `view-terminal-memory` / `view-task-memory` (the latter three accept the existing `runtime/db/memory-views.ts` view functions with their `MEMORY_VIEW_MAX_*` caps), `save-layout` / `read-layout` / `clear-layout`, and `hide-terminal` / `stop-and-remove-terminal` / `delete-terminal-history`. Read-only memory views default `timeoutMs: 5_000`; mutating IPCs default `15_000`. `SessionService` wires the new methods: `updateSessionMetadataPatch(sessionId, patch)` (PATCH semantics — merges into the existing `SessionMetadata` via `findSession().metadata` + emits a `session-changed` event with `action: "updated"`); `saveLayout` / `readLayout` / `clearLayout` (delegate to `WorkspaceState`); `saveEnvProfilesResult` / `saveHooksResult` return `{count}` (the legacy `saveEnvProfiles` / `saveHooks` keep their `Snapshot` shape for backwards compatibility). New `shared/workspace6-schema.ts` ships the Zod `.strict()` request/response schemas (mirroring M5.1 / M5.2 / M5.3 / M5.4's pattern): `LAYOUT_VERSION = 3`, `savedLayoutSchema`, `paneStateSchema`, `splitConfigSchema`, `splitRatioSchema` (z.number().min(0.1).max(0.9)), `sessionMetadataPatchSchema` (partial of `sessionMetadataSchema`), `terminalLifecyclePolicySchema`, `lifecycleDeciderSchema`, plus all the request/result envelopes (`hideTerminalInputSchema` / `hideTerminalResultSchema`, etc.). Renderer-side pure logic ships in `src/renderer/command-logic.ts` (`scoreCommand` lowercased substring match on `label + aliases`, `selectCommands` top-N with id-tiebreak, `filterByScope`, `readRecentCommands` / `pushRecentCommand` LRU dedup at head) and `src/renderer/pane-logic.ts` (`toggleSplit`, `cycleFocus`, `setRatio` with `PANE_RATIO_MIN = 0.1` / `PANE_RATIO_MAX = 0.9` clamping, `selectInFocusedPane`, `hideTerminal`). `src/renderer/session-header-logic.ts` ships `layoutTagChips` (max `MAX_VISIBLE_TAGS = 6` + `+N` overflow chip), `sessionStripeColor`, `toggleArchived`. The pure-logic split lets tests exercise the matching algorithm + state machine without jsdom (the project's renderer test posture: `react-test-renderer` / `jsdom` are NOT installed; tests use the existing `node:test` + `node:assert/strict` pattern against the pure functions). Seventy new focused tests across eight files: `tests/runtime/orchestration-terminal-lifecycle.test.ts` (11 — hide registry row untouched + sets hiddenAt, stop-and-remove detaches + sets removedAt + clears hiddenAt, delete-history rejects `decider:'system'`, re-attach after stop-and-remove succeeds, re-attach after delete-history throws, audit digest stable, concurrent calls serialized, IPC enum alias, missing terminalUuid NOT_FOUND, TerminalInputQueue.cancel invoked); `tests/runtime/workspace-state-layouts.test.ts` (12 — v2→v3 migration, hydrateLayouts keeps well-formed + drops malformed, digestLayout stable + differs on ratio change, schema rejects unknown fields / bad ratio / non-UUID activeTerminalId / > 64 hidden ids, `resolveTerminalLifecyclePolicy` maps `graceful → stop-and-remove`, `ensureLayoutVersion` migrates v2 to v3 + throws on v4, `emptySavedLayout` + `serializeLayouts` round-trip, `countLayouts` reads the v3 layouts map); `tests/runtime/ipc-session-metadata.test.ts` (7 — patch schema strict rejects extras, accepts empty / tags-only / colors regex `/^#[a-fA-F0-9]{6}$/`, merges idempotently, rejects > 20 tags, sessionId round-trips through the PATCH flow); `tests/runtime/ipc-hooks-env-profiles.test.ts` (9 — env-profiles reject non-objects / accept valid / reject > 100 / require `profiles` field; hooks reject non-Hook / accept empty list / reject > 100 / reject unknown action.type / accept minimal notify); `tests/runtime/ipc-memory-views.test.ts` (9 — session requires sessionId + max 256 chars + maxTasks ≤ 64 + optional, terminal requires UUID + maxLines ≤ 4096, task requires UUID taskId + maxEvents ≤ 256, all three reject unknown top-level fields); `tests/renderer/command-palette.test.ts` (10 — substring hit ordering, alias scoring, empty query leaderboard, top-N limit, id-tiebreak, scope filtering, recent-commands LRU dedup + cap); `tests/renderer/pane-layout.test.ts` (7 — toggleSplit, cycleFocus no-op when disabled, cycle alternates when enabled, ratio clamp, selectInFocusedPane, hideTerminal idempotent + clears active); `tests/renderer/session-metadata-ui.test.ts` (5 — overflow chip layout, default cap, empty case, stripe color fallback, archive toggle immutability). The IPC surface remains `API_VERSION = 1`; renderer / IPC integration of the new IPC methods (`App.tsx` consuming `PaneLayout` + `CommandPalette` + `SessionHeader`, `TerminalPanel` switching to the new prop shape, global `keydown` listener for the palette hotkey `Ctrl+Shift+P`, `Ctrl+Shift+S` splitter toggle, `Ctrl+Shift+ArrowUp/Down` focus cycle) is deferred to a follow-up transport-wiring increment. The IPC contract + lifecycle service + saved-layout persistence are the durable seams that future renderer increments will plug into.
+- M5.7: literal bounded prompt anchors as a heuristic terminal-readiness hint. Opens the seventh M5 bullet ("Add literal bounded prompt anchors as an optional ordinary-terminal readiness hint, if still useful. A detected prompt is heuristic and never proof of agent readiness, health or task completion. Structured providers use their tested event contract."). New `shared/prompt-anchor-schema.ts` ships the strict Zod anchor contract: `promptAnchorSourceSchema = "literal"` (the only wired source today; future `permission_request` / `idle` events from a structured provider will extend this enum without colliding with the existing digest), `promptAnchorSchema` carrying `{terminalUuid: UUID, anchoredAt: int (ms-since-epoch), anchorText: string, sourceSeq: int, source: "literal", promptAnchorDigest: 64-hex}`, plus `promptAnchorResultSchema` (kind discriminator `"terminal"` matches the existing memory-view contract). The settings key schemas (`promptAnchorEnabledSchema`, `promptAnchorsMaxPerTerminalSchema`, `promptAnchorStalenessMsSchema`, `promptAnchorLiteralsSchema`) extend the `KNOWN_SETTING_KEYS` allowlist in `runtime/db/effective-settings.ts` (the persisted `settingsSchema` in `shared/settings.ts` is not touched — M5.7 keeps the seam narrow per the deferred-renderer decision). New `runtime/orchestration/prompt-anchor.ts` ships the pure detection: `DEFAULT_PROMPT_ANCHOR_LITERALS = ["$ ", "> ", "❯ ", "╭ ", "› "]` (five well-known prompt tails), `PROMPT_ANCHOR_LINE_WINDOW = 64` (tighter than the M4.6.c `MEMORY_VIEW_MAX_TERMINAL_LINES = 4096`), `DEFAULT_PROMPT_ANCHOR_MAX_PER_TERMINAL = 1`, `DEFAULT_PROMPT_ANCHOR_STALENESS_MS = 30_000`, `mergeLiteralAllowlist(builtin, custom)` (dedupe + 16-entry cap), `resolvePromptAnchorSettings(input)` (defaults when absent), `digestPromptAnchor(terminalUuid, anchoredAt, anchorText, sourceSeq)` (SHA-256 over the canonical `{terminalUuid, version: 1, anchoredAt, anchorText, sourceSeq, source: "literal"}` projection via `runtime/db/effective-settings.ts:stableStringify` — `version: 1` is reserved so a future structured-provider anchor can re-use the schema with a different version constant without colliding with today's literal digest), and `latestPromptAnchor(terminalUuid, lines, settings)` which slices `lines` to the last ≤ 64 entries, walks them in reverse, and returns the FIRST line whose `content.endsWith(anyLiteral)` — literal `endsWith` only, no regex, no glob, no escaping, with `anchorText = line.content` and `anchoredAt = Date.parse(line.capturedAt)` (falls back to `Date.now()` on malformed timestamps). `runtime/db/memory-views.ts` augments `TerminalMemoryData` with `readonly promptAnchor: PromptAnchor | null`; `viewTerminalMemory` calls `latestPromptAnchor(...)` after `listTerminalHistory` and BEFORE `digestBounded(data)`, so the anchor participates in the existing content-addressed `digest` projection — a fresh anchor invalidates the rendered chip by digest mismatch without any new IPC. The IPC surface remains `API_VERSION = 1`; **no new IPC methods** (the existing `view-terminal-memory` IPC piggybacks the new field on its already-typed `data` payload). Settings plumbing: `viewTerminalMemory` accepts an optional `promptAnchorSettings?: Partial<PromptAnchorSettings>` input — `null`/absent uses defaults, so existing callers stay source-compatible. The four new keys (`promptAnchorEnabled`, `promptAnchorsMaxPerTerminal`, `promptAnchorStalenessMs`, `promptAnchorLiterals`) extend `KNOWN_SETTING_KEYS` so the M4.2 effective-settings digest machinery knows about them; the persisted `settingsSchema` in `shared/settings.ts` is intentionally NOT extended because the runtime settings store is unchanged for M5.7 — the runtime's caller (the future transport-wiring increment) will thread settings from `SettingsStore.load()` into `viewTerminalMemory`'s new optional input. Fourteen focused tests in `tests/runtime/prompt-anchor.test.ts` cover literal match + non-null anchor, no-match returns null, multiple literal lines ⇒ latest wins (reverse walk), `enabled = false` ⇒ null regardless of content, `digestPromptAnchor` deterministic across two calls, digest sensitivity to `anchorText` byte changes, digest sensitivity to `sourceSeq` changes, `viewTerminalMemory` round-trip (`data.promptAnchor` reflects the latest match), digest-mutation invalidation (`viewTerminalMemory.digest` changes when a new history line produces a new anchor), `PROMPT_ANCHOR_LINE_WINDOW = 64` enforced (anchor at index 5 outside window ⇒ null; anchor at index 95 inside window ⇒ non-null, asserting `sourceSeq = 96` since seq is 1-based), `mergeLiteralAllowlist` dedup + 16-entry cap (with a 32-entry input that gets capped at 16), `promptAnchorSchema.strict()` rejection of unknown fields, and `promptAnchorSchema` rejection of non-64-hex digests. Suite lands at **689 tests** (675 → 689, +14 new). **Renderer chip wiring + JSX + CSS variables + lazy IPC caller are deferred to M5.7-follow-up** (consistent with M5.1–M5.6's pattern of shipping the runtime seam first). **Known runtime gap documented in the test file header**: PTY frames are not yet piped into `appendTerminalHistory` at runtime (`src/main/pty-attachment.ts`); M5.7 correctness rests on the seeding path used in tests until a follow-up wiring PR closes that gap. M5.7 never claims the anchor proves readiness / health / task completion — it is a hint, deterministic, content-addressed, and stale-by-time.
+
+## [1.2.3] - 2026-09-21
+
+Release qualification cut. Closes M9.2 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+
+### Highlights
+
+- Aggregated release documentation: `docs/release-notes-1.2.3.md`,
+  `docs/dependencies.md`, `docs/licenses.md`, `docs/compatibility.md`.
+  The release notes enumerate the supported prefix and the explicit
+  unsupported prefix (per M9.0's "label their scope" clause).
+- Single-source version export: `src/shared/version.ts` resolves
+  `VERSION` from injected define → bundled package.json → source
+  package.json → `"0.0.0-unknown"` fallback.
+- SHA-256 integrity manifest: `scripts/release.mts:writeIntegrityManifest`
+  walks the retained tree at the `retained` checkpoint of
+  `publishRelease` and writes a sorted `MANIFEST.sha256` of
+  `<sha256>  <relative-path>` lines. `scripts/verify-release.mts`
+  is the CLI verifier (`npm run verify:release`).
+- Recovery + rollback runbooks: `docs/runbooks/index.md`,
+  `recovery-interrupted-install.md`, `recovery-corrupted-db.md`,
+  `recovery-failed-migration.md`, `verify-release-integrity.md`;
+  top-level `docs/update-rollback.md`.
+- The release artifact is **not** signed and **not** claimed
+  reproducible. The integrity manifest attests to bytes within a
+  single build run; signing and independent-rebuild equivalence
+  are documented as known follow-ups in `docs/release-notes-1.2.3.md`.
+
+### Added
+
+- `docs/release-notes-1.2.3.md`, `docs/dependencies.md`,
+  `docs/licenses.md`, `docs/compatibility.md`.
+- `docs/runbooks/index.md`, `docs/runbooks/recovery-interrupted-install.md`,
+  `docs/runbooks/recovery-corrupted-db.md`,
+  `docs/runbooks/recovery-failed-migration.md`,
+  `docs/runbooks/verify-release-integrity.md`, `docs/update-rollback.md`.
+- `src/shared/version.ts` — `VERSION`, `resolveVersion`,
+  `setVersionForTest`.
+- `scripts/verify-release.mts` — `npm run verify:release`.
+- `tests/release/release-checksum.test.ts` — round-trip,
+  tamper-detection, idempotent re-write, and missing-manifest cases.
+
+### Changed
+
+- `package.json` — version 1.2.2 → 1.2.3; add `verify:release` script.
+- `scripts/release.mts` — `writeIntegrityManifest` called at the
+  `retained` checkpoint; the manifest is excluded from itself and
+  from `.package.lock`. New `verifyIntegrityManifest` export.
+- `.gitignore` — exclude generated `MANIFEST.sha256` and `*.sha256`
+  sidecars under `release/`.
+
+### Test coverage
+
+- `npx tsc --noEmit` — 0 errors.
+- `tests/release/release-checksum.test.ts` — 6 tests, green.
+- Prior gate tests (`tests/runtime/m6-gate.test.ts`,
+  `tests/runtime/m7-gate.test.ts`, `tests/runtime/m9-gate.test.ts`)
+  — still green.
+
+## [1.2.2] - 2026-09-13
+
+M0 compatibility and packaging prerequisites for the FUTURE roadmap.
+
+- Discover backend and desktop tests recursively; list both suites in CI.
+- Build into clean output and fresh release staging, smoke the exact candidate without global Node/npm, then atomically select an immutable build. Retain a previous build for explicit rollback. Preserve legacy release directories.
+- Refuse newer state schemas and all saves after failed/unreadable initialization. Preserve malformed-state recovery backups and existing version-1 migration.
+- Add roving terminal-tab keyboard navigation and accessible dialog names/focus restoration.
+- Test acknowledged Unicode drafts after SIGKILL, publication interruptions and stale assets.
+- Add isolated packaged runtime/SQLite and OS-lock experiments, including real tmux survival under detached and user-service ownership. Add read-only provider capability discovery that explicitly distinguishes advertised features from verified support.
+
+The runtime experiments do not migrate profiles or move production ownership out of Electron. Live provider qualification, transactional application storage and managed execution remain later milestones. See [verification](docs/verification.md) and the [roadmap](FUTURE/IMPLEMENTATION-README.md).
+
+## [1.2.1] - 2026-09-13
+
+Bug-fix baseline after the [source review](docs/review-2026-09-12.md).
+
+- Serialize active writes and drain them during shutdown; surface persistence failures.
+- Commit validated state only after disk success. Restore data and directory fsync by default; remove the fixed 50 ms save delay.
+- Preserve corrupt/unsupported state in a durable recovery copy before allowing edits; make the recovery notice available after renderer startup.
+- Restore acknowledged, bounded terminal input; correct UTF-8 output accounting and multiline paste; cancel disposed rendering callbacks.
+- Drain accepted IPC and active launch work before closing storage. Report failed shutdown separately from success.
+- Drain shutdown before closing a loading renderer; prevent repeated quit requests from bypassing the drain. Suppress expected load-abort dialogs and dispose restarted test applications completely.
+- Recover unreaped tmux pane exits during polling without signalling terminal jobs or fabricating exit codes.
+- Strengthen tests to verify actual command output, durable saves, recovery copies, write ordering and cancellation.
+- Correct unsupported completion claims and align package/lockfile versions. See the [current baseline](docs/build-snapshot-v1.2.1.md) for verification and remaining scope.
+
+The 1.2.0 notes below are historical; their durability/performance guarantees were not all supported by the implementation.
+
 ## [1.2.0] - 2026-09-12
 
 Hardening, performance, and resilience on top of the v1.1.0 baseline. The seven foundation commits are recorded in [`docs/v1.2-work.md`](docs/v1.2-work.md); the work in this release is summarised below.
@@ -52,3 +652,5 @@ Initial public release. Verified against the snapshot in [`docs/build-snapshot-v
 [1.1.0]: #110---2026-09-09
 [1.2.0]: #120---2026-09-12
 
+
+[1.2.1]: #121---2026-09-12

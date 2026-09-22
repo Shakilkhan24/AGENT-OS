@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { EventBus } from "../src/main/event-bus";
@@ -45,6 +45,26 @@ test("event replay is bounded, ordered, durable and never triggers live subscrib
   await writeFile(bus.file, "{corrupt");
   await assert.rejects(new EventBus(root).initialize());
   assert.equal(await readFile(bus.file, "utf8"), "{corrupt");
+});
+
+test("journal failures reject publication without advancing subscribers or replay", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "minimal-events-failure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bus = new EventBus(root);
+  await bus.initialize();
+  await mkdir(bus.file);
+  const seen: number[] = [];
+  bus.subscribe(event => seen.push(event.seq));
+  await assert.rejects(bus.publish({ type: "engine-restored", sourceId: "engine", data: {} }));
+  assert.equal(bus.replay(0).latestSeq, 0);
+  assert.deepEqual(seen, []);
+  await assert.rejects(bus.flush());
+  await rm(bus.file, { recursive: true });
+  await bus.publish({ type: "engine-restored", sourceId: "engine", data: {} });
+  assert.equal(JSON.parse(await readFile(bus.file, "utf8")).sequence, 1);
+  await bus.close();
+  await assert.rejects(bus.publish({ type: "engine-restored", sourceId: "engine", data: {} }), /closed/);
+  assert.deepEqual(seen, [1]);
 });
 test("event payloads and on-disk ordering are validated", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "minimal-events-"));

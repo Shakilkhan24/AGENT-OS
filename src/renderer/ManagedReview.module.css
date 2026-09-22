@@ -1,0 +1,765 @@
+/*
+ * M3c.1 / M3c.2 — managed review shell styles.
+ *
+ * The shell sits where `SessionSidebar` normally sits, so it inherits
+ * the same `256px` width budget split three ways: 220 list, flex detail,
+ * 280 stream. The exact split is tuned for ~1024 viewport widths; on
+ * narrower viewports the detail pane truncates with ellipsis instead of
+ * clipping.
+ *
+ * The dot palette mirrors `colourForStreamType()` from
+ * `runtime/managed-stream-types.ts`; keep them in sync.
+ */
+.managed-review {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 280px;
+  width: 256px;
+  min-width: 256px;
+  border-right: 1px solid #303830;
+  background: #1a1f1b;
+  color: #dce1dc;
+  font-size: 12px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.managed-review.unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 28px 22px;
+  gap: 12px;
+  width: 280px;
+  min-width: 280px;
+}
+.managed-review.unavailable h2 {
+  margin: 0;
+  font-size: 16px;
+  color: #f1f4ef;
+}
+.managed-review.unavailable p {
+  margin: 0;
+  color: #95a08f;
+  line-height: 1.55;
+}
+.managed-review.unavailable .reason {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #c89191;
+}
+.managed-review.unavailable .reason code {
+  background: #232924;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.managed-list,
+.managed-detail,
+.managed-stream {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  outline: none;
+}
+/* M9.3: the columns visually own the keyboard focus ring so a screen-reader
+   or keyboard-only user can see which pane is active. */
+.managed-list:focus-visible,
+.managed-detail:focus-visible,
+.managed-stream:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
+
+.managed-list {
+  border-right: 1px solid #2a302c;
+  background: #181c19;
+}
+.managed-detail {
+  border-right: 1px solid #2a302c;
+  background: #181c19;
+  min-width: 0;
+}
+.managed-stream {
+  background: #181c19;
+}
+
+.managed-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #2a302c;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: #9ba597;
+  text-transform: uppercase;
+}
+.managed-column-header > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.managed-column-meta {
+  font-size: 10px;
+  color: #6e7a6b;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.managed-list.focused,
+.managed-detail.focused {
+  background: #1d221f;
+}
+
+.managed-empty {
+  margin: 14px;
+  font-size: 11.5px;
+  color: #7c867f;
+  line-height: 1.55;
+}
+
+/* task list */
+.managed-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.managed-list > ul {
+  overflow-y: auto;
+  padding: 6px 0 12px;
+}
+.managed-project-group {
+  margin-bottom: 10px;
+}
+.managed-project-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 14px 4px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: #95a08f;
+  text-transform: uppercase;
+}
+.managed-task-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: transparent;
+  border: 0;
+  color: #d4dacf;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.managed-task-row:hover {
+  background: #1f2521;
+}
+.managed-task-row[data-selected="true"] {
+  background: #232924;
+  border-left-color: var(--accent);
+}
+.managed-task-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.managed-task-status {
+  font-size: 9.5px;
+  color: #7c867f;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.managed-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7c867f;
+}
+.managed-status-running { color: #c5edaa; }
+.managed-status-ready { color: #9bd1ff; }
+.managed-status-completed { color: #c5edaa; }
+.managed-status-spawned { color: #9bd1ff; }
+.managed-status-admitted { color: #c5edaa; }
+.managed-status-failed { color: #e89090; }
+.managed-status-stalled { color: #e8c87b; }
+.managed-status-halted { color: #e8c87b; }
+.managed-status-dispatched { color: #c5edaa; }
+.managed-status-claimed { color: #9bd1ff; }
+.managed-status-accepted { color: #9bd1ff; }
+.managed-status-rejected { color: #e89090; }
+.managed-status-resolved { color: #c5edaa; }
+.managed-status-dismissed { color: #7c867f; }
+.managed-status-imported { color: #9bd1ff; }
+.managed-status-held { color: #c5edaa; }
+.managed-status-unknown { color: #6e7a6b; }
+
+/* detail */
+.managed-detail-body {
+  padding: 14px;
+  overflow-y: auto;
+}
+.managed-task-heading {
+  margin: 0 0 6px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #f1f4ef;
+  line-height: 1.25;
+}
+.managed-task-objective {
+  margin: 0 0 12px 0;
+  font-size: 11.5px;
+  color: #95a08f;
+  line-height: 1.5;
+}
+.managed-task-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  margin: 0 0 16px 0;
+}
+.managed-task-meta > div { display: flex; flex-direction: column; gap: 2px; }
+.managed-task-meta dt {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #6e7a6b;
+  text-transform: uppercase;
+  margin: 0;
+}
+.managed-task-meta dd {
+  margin: 0;
+  font-size: 11.5px;
+  color: #dce1dc;
+  word-break: break-all;
+}
+
+.managed-section { margin-top: 14px; }
+.managed-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  color: #9ba597;
+  text-transform: uppercase;
+}
+.managed-run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.managed-run-list li {
+  display: grid;
+  grid-template-columns: 14px 78px 80px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #cbd3c5;
+  padding: 3px 0;
+}
+.managed-run-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #d4dacf;
+}
+.managed-run-status {
+  font-size: 9.5px;
+  letter-spacing: 0.4px;
+  color: #9ba597;
+  text-transform: uppercase;
+}
+.managed-run-invocations {
+  font-size: 10.5px;
+  color: #7c867f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* stream */
+.managed-stream-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.managed-stream-entry {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 8px;
+  padding: 6px 6px;
+  border-radius: 6px;
+  background: #1d221f;
+}
+.managed-stream-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+  background: #6e7a6b;
+}
+.managed-stream-dot-blue { background: #9bd1ff; }
+.managed-stream-dot-green { background: #c5edaa; }
+.managed-stream-dot-orange { background: #e8c87b; }
+.managed-stream-dot-red { background: #e89090; }
+.managed-stream-dot-yellow { background: #e8c87b; }
+.managed-stream-dot-slate { background: #95a08f; }
+.managed-stream-meta {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 10px;
+  color: #95a08f;
+}
+.managed-stream-seq {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #6e7a6b;
+}
+.managed-stream-type {
+  color: #dce1dc;
+  font-size: 10.5px;
+}
+.managed-stream-at {
+  margin-left: auto;
+  color: #6e7a6b;
+  font-size: 10px;
+}
+.managed-stream-payload {
+  grid-column: 2;
+  margin: 4px 0 0 0;
+  background: #111512;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #cbd3c5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+/* M3c.2 — verifier + review sections.
+ *
+ * Reuse the section / row grid from the runs/invocations blocks; add
+ * button + badge variants for the interactive Accept/Reject/Approve
+ * affordances. The colour palette is deliberately muted; status hues
+ * match the existing .managed-status-* classes so the user can scan
+ * the section without learning a second palette.
+ */
+.managed-recipe-list,
+.managed-review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.managed-recipe-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: #1d221f;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #cbd3c5;
+}
+.managed-recipe-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.managed-recipe-name {
+  font-size: 11.5px;
+  color: #f1f4ef;
+  font-weight: 600;
+}
+.managed-recipe-cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #95a08f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.managed-recipe-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.managed-badge {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #232924;
+  color: #9ba597;
+}
+.managed-badge-running {
+  background: #2c3a2c;
+  color: #c5edaa;
+}
+
+.managed-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: #2a302c;
+  color: #dce1dc;
+  border: 1px solid #3a4239;
+  cursor: pointer;
+  text-transform: none;
+}
+.managed-button:hover:not(:disabled) {
+  background: #323832;
+}
+.managed-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.managed-button-primary {
+  background: #2d4f2d;
+  border-color: #3d6b3d;
+  color: #d9efcc;
+}
+.managed-button-primary:hover:not(:disabled) {
+  background: #386138;
+}
+.managed-button-accept {
+  background: #2d4f2d;
+  border-color: #3d6b3d;
+  color: #d9efcc;
+}
+.managed-button-accept:hover:not(:disabled) {
+  background: #386138;
+}
+.managed-button-reject {
+  background: #4a2d2d;
+  border-color: #6b3d3d;
+  color: #efd1cc;
+}
+.managed-button-reject:hover:not(:disabled) {
+  background: #613838;
+}
+
+.managed-review-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: #1d221f;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #cbd3c5;
+}
+.managed-review-row-accepted { border-left: 2px solid #5b8c5b; }
+.managed-review-row-rejected { border-left: 2px solid #8c5b5b; }
+.managed-review-row-invalidated { border-left: 2px solid #6e7a6b; }
+.managed-review-row-open { border-left: 2px solid #4f6a8c; }
+
+.managed-review-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.managed-review-identity {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #d4dacf;
+}
+.managed-review-evidence,
+.managed-review-by {
+  font-size: 10.5px;
+  color: #95a08f;
+}
+.managed-review-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.managed-review-terminal {
+  font-size: 9.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #6e7a6b;
+}
+
+/* M3c.4 — diff/artifact view.
+ *
+ * Diff section: line-type colour classes (`+` green, `-` red, ` `
+ * neutral, `@@` hunk slate, file headers slate). The body itself uses
+ * `white-space: pre-wrap` + `word-break: break-all` so long lines stay
+ * inside the column without forcing horizontal scroll.
+ *
+ * Artifact preview drawer: absolutely-positioned right-side panel
+ * (~420 px wide) anchored inside the `managed-review` shell. Escape
+ * closes (handler is in the component, not the CSS).
+ */
+.managed-section h3 > .managed-button {
+  margin-left: auto;
+}
+
+.managed-empty-warn {
+  color: #e8c87b !important;
+}
+.managed-empty-error {
+  color: #e89090 !important;
+}
+
+.diff-body {
+  border: 1px solid #2a302c;
+  border-radius: 6px;
+  background: #111512;
+  overflow: hidden;
+}
+.diff-meta {
+  display: flex;
+  gap: 14px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #2a302c;
+  background: #181c19;
+  font-size: 10px;
+  color: #95a08f;
+  letter-spacing: 0.4px;
+}
+.diff-meta code,
+.diff-meta span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.diff-pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #cbd3c5;
+  background: #111512;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-line-add { color: #c5edaa; display: inline; }
+.diff-line-del { color: #e89090; display: inline; }
+.diff-line-neutral { color: #cbd3c5; display: inline; }
+.diff-line-hunk { color: #9bd1ff; display: inline; }
+.diff-line-file-header { color: #95a08f; display: inline; }
+
+.managed-button-preview {
+  font-size: 10px;
+  padding: 3px 8px;
+}
+.managed-button-preview.active {
+  background: #2d4f2d;
+  border-color: #3d6b3d;
+  color: #d9efcc;
+}
+
+.managed-artifact-row {
+  grid-template-columns: 14px 78px 90px 1fr auto !important;
+}
+
+.artifact-preview-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 420px;
+  max-width: 90%;
+  height: 100%;
+  background: #1a1f1b;
+  border-left: 1px solid #303830;
+  display: flex;
+  flex-direction: column;
+  font-size: 11.5px;
+  color: #dce1dc;
+  z-index: 5;
+  box-shadow: -8px 0 16px rgba(0, 0, 0, 0.4);
+}
+.artifact-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #2a302c;
+  background: #181c19;
+}
+.artifact-preview-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #dce1dc;
+}
+.artifact-preview-title strong {
+  font-weight: 600;
+  color: #f1f4ef;
+}
+.artifact-preview-body {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px;
+  min-height: 0;
+}
+.artifact-preview-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: #111512;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: #cbd3c5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.artifact-preview-footer {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  padding: 8px 12px;
+  border-top: 1px solid #2a302c;
+  background: #181c19;
+  font-size: 10px;
+}
+.artifact-preview-footer > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.artifact-preview-footer code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: #d4dacf;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ───────── M3c.5 — prompt editor + actions + keyboard focus ───────── */
+
+.managed-prompt-editor .managed-prompt-textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  padding: 8px 10px;
+  background: #111512;
+  color: #dce1dc;
+  border: 1px solid #303830;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  outline: none;
+}
+.managed-prompt-editor .managed-prompt-textarea:focus {
+  border-color: #4f7a4f;
+  box-shadow: 0 0 0 1px #2d4f2d inset;
+}
+/* M9.3: keyboard-only focus is visually distinct from the mouse-only :focus rule
+   so a screen reader or keyboard-only user sees an explicit ring. */
+.managed-prompt-editor .managed-prompt-textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.managed-prompt-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: #95a08f;
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.managed-actions .managed-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.managed-action-input {
+  grid-column: 1 / span 2;
+  padding: 6px 8px;
+  background: #111512;
+  color: #dce1dc;
+  border: 1px solid #303830;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 11.5px;
+}
+.managed-action-input:focus {
+  outline: none;
+  border-color: #4f7a4f;
+  box-shadow: 0 0 0 1px #2d4f2d inset;
+}
+/* M9.3: keyboard-only focus ring for the action input. Mouse clicks keep
+   the colour-only :focus rule so the form doesn't flicker on click. */
+.managed-action-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.managed-button-answer {
+  background: #2d3a2d;
+  border-color: #4f7a4f;
+  color: #d9efcc;
+}
+.managed-button-answer:hover:not(:disabled) {
+  background: #3a4f3a;
+}
+.managed-button-continue {
+  background: #2d3f4d;
+  border-color: #4f6f7a;
+  color: #cfe1ef;
+}
+.managed-button-continue:hover:not(:disabled) {
+  background: #3a4f5a;
+}
+.managed-button-new-attempt {
+  background: #3a3a2d;
+  border-color: #6f6f4f;
+  color: #efdfcc;
+}
+.managed-button-new-attempt:hover:not(:disabled) {
+  background: #4a4a3a;
+}
+.managed-button-stop {
+  background: #4f2d2d;
+  border-color: #7a4f4f;
+  color: #efcccc;
+}
+.managed-button-stop:hover:not(:disabled) {
+  background: #5a3a3a;
+}

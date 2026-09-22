@@ -1,0 +1,106 @@
+/**
+ * M3a — managed mutation gate.
+ *
+ * Every file/editor mutation that targets a managed workspace MUST go
+ * through `mutateWithLease`. The gate enforces:
+ *  - a `held` lease exists for the workspace,
+ *  - the lease has not expired,
+ *  - the holder matches the supplied `holder`,
+ *  - the caller's `fencingToken` matches the lease's current token.
+ *
+ * Stale callers (a crashed controller whose TTL elapsed and was renewed
+ * by another holder) are rejected with `LEASE_UNCERTAIN` so the renderer
+ * can offer the user the choice between inspecting the workspace or
+ * tearing the checkout down. A successful call returns a new fencing
+ * token the caller can stamp onto the next mutation.
+ *
+ * M3c.2 — when the input carries `runId` and `invalidateReason`, a
+ * successful body call also invalidates every `open` review for that
+ * run (transitioning to `invalidated` and raising an
+ * `attention_item(kind: review)` per invalidated review). This couples
+ * the review state machine to the same `head_revision` / dirty-set the
+ * mutation just advanced.
+ */
+import { z } from "zod";
+import { AppError } from "../../shared/errors";
+import { readActiveLease } from "./leases";
+import { invalidateOpenReviewsForRun } from "./reviews";
+import type { DbWorker } from "./worker";
+
+const GATE_INPUT = z.object({
+  workspaceId: z.string().uuid(),
+  holder: z.string().min(1).max(256),
+  fencingToken: z.number().int().min(0),
+  /**
+   * M3c.2: optional run id. When supplied, a successful body call
+   * invalidates every `open` review for the run (see
+   * `invalidateOpenReviewsForRun`). Callers that do not own a run
+   * (e.g. one-shot maintenance mutations) omit this.
+   */
+  runId: z.string().uuid().optional(),
+  /** M3c.2: the reason passed to `invalidateOpenReviewsForRun`. */
+  invalidateReason: z.string().min(1).max(256).optional(),
+}).strict();
+export type MutateWithLeaseInput = z.input<typeof GATE_INPUT>;
+
+export interface GateOk { readonly ok: true; readonly nextToken: number }
+export interface GateDeny { readonly ok: false; readonly reason: "expired" | "mismatch" | "missing"; readonly message: string }
+export type GateResult = GateOk | GateDeny;
+
+/**
+ * Returns a result object instead of throwing so the renderer can render
+ * an actionable message ("Lease expired", "Stale write rejected", etc.)
+ * without unwinding the call stack.
+ */
+export async function checkLease(worker: DbWorker, input: MutateWithLeaseInput): Promise<GateResult> {
+  const parsed = GATE_INPUT.parse(input);
+  // Read and validate in one synchronous database transaction.
+  return worker.transaction(tx => {
+    void tx;
+    const lease = readActiveLease(worker, parsed.workspaceId);
+    if (!lease) return { ok: false, reason: "missing", message: "No active lease for this workspace" } as GateDeny;
+    if (lease.holder !== parsed.holder)
+      return { ok: false, reason: "mismatch", message: `Lease held by ${lease.holder}, not ${parsed.holder}` } as GateDeny;
+    if (lease.fencingToken !== parsed.fencingToken)
+      return { ok: false, reason: "mismatch", message: "Stale write rejected: lease token mismatch" } as GateDeny;
+    if (new Date(lease.expiresAt).getTime() <= Date.now())
+      return { ok: false, reason: "expired", message: "Lease has expired" } as GateDeny;
+    return { ok: true, nextToken: lease.fencingToken } as GateOk;
+  });
+}
+
+/**
+ * Throwing variant: for callers that prefer a hard error. Throws an
+ * `AppError` whose code matches the gate reason (`LEASE_UNCERTAIN` for
+ * expired/missing, `CONFLICT` for fencing-token mismatch).
+ */
+export async function assertLease(worker: DbWorker, input: MutateWithLeaseInput): Promise<GateOk> {
+  const result = await checkLease(worker, input);
+  if (result.ok) return result;
+  if (result.reason === "mismatch")
+    throw new AppError("CONFLICT", result.message);
+  throw new AppError("LEASE_UNCERTAIN", result.message);
+}
+
+/**
+ * Wrap a mutation body so the gate is checked before the body runs and
+ * the lease is auto-renewed on success (the writer is presumed alive).
+ *
+ * M3c.2: when the input carries `runId` + `invalidateReason`, the
+ * post-body step also invalidates open reviews for the run.
+ */
+export async function mutateWithLease<T>(
+  worker: DbWorker,
+  input: MutateWithLeaseInput,
+  body: () => Promise<T>,
+): Promise<T> {
+  await assertLease(worker, input);
+  const out = await body();
+  // M3c.2 — invalidate open reviews only after the body succeeds. A
+  // failed body does not advance the candidate, so reviews stay valid.
+  const parsed = GATE_INPUT.parse(input);
+  if (parsed.runId && parsed.invalidateReason) {
+    await invalidateOpenReviewsForRun(worker, parsed.runId, parsed.invalidateReason);
+  }
+  return out;
+}

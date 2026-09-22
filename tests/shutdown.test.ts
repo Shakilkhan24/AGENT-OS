@@ -1,14 +1,4 @@
-/**
- * Tests for the shutdown flush watchdog. Pins the contract:
- *
- *   - Normal close resolves `done` as "completed" without invoking onTimeout.
- *   - A hung close (e.g. wedged fsync) trips the watchdog after the
- *     budget, invokes onTimeout, and resolves `done` as "timed-out".
- *   - A failing close (rejected promise) is logged but still resolves
- *     "completed" — a fast rejection shouldn't force-exit the app.
- *   - cancel() short-circuits the watchdog when the caller already
- *     settled successfully.
- */
+/** Shutdown outcomes distinguish completed, failed, cancelled and timed-out work. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runWithWatchdog } from "../src/main/shutdown";
@@ -51,7 +41,7 @@ test("hung close trips the watchdog after the budget and invokes onTimeout", asy
   assert.equal(logger.entries[0].fields?.budgetMs, 50);
 });
 
-test("rejected close logs the failure but still resolves 'completed'", async () => {
+test("rejected close logs the failure and resolves as failed", async () => {
   const logger = makeLogger();
   let timeoutFired = false;
   const result = runWithWatchdog(async () => {
@@ -62,7 +52,7 @@ test("rejected close logs the failure but still resolves 'completed'", async () 
     log: logger.log,
   });
   const outcome = await result.done;
-  assert.equal(outcome, "completed");
+  assert.equal(outcome, "failed");
   assert.equal(timeoutFired, false);
   // Failure is logged so the operator can see why we shut down dirty.
   assert.equal(logger.entries.length, 1);
@@ -81,7 +71,7 @@ test("cancel() prevents the watchdog from firing after a successful close", asyn
   });
   result.cancel();
   const outcome = await result.done;
-  assert.equal(outcome, "completed");
+  assert.equal(outcome, "cancelled");
   // Wait long enough for the budget to elapse if cancel had no effect.
   await new Promise((r) => setTimeout(r, 80));
   assert.equal(timeoutFired, false);

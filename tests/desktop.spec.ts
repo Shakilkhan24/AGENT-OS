@@ -458,6 +458,13 @@ test("configurable workflows, independent sessions, rename/remove controls and r
       .fill("workers");
     await page.getByRole("button", { name: /^Launch \d+ terminals?$/ }).click();
     await expect(page.getByRole("tab")).toHaveCount(3);
+    // Tab records are visible while a batch is still starting. PID comparison
+    // requires completed launches, not just the persisted three-item intent.
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.minimal.snapshot());
+      return state.sessions[0].terminals.filter(t => t.status === "running" && t.pid !== undefined).length;
+    }).toBe(3);
     const initial = await page.evaluate(() => window.minimal.snapshot());
     expect(
       initial.sessions[0].terminals.every(

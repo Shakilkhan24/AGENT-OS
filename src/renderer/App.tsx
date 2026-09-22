@@ -1,54 +1,40 @@
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import {
-  ArrowUpRight,
+  Bell,
   Check,
   ChevronRight,
-  CircleHelp,
   Command,
   Folder,
   FolderOpen,
+  HelpCircle,
   Layers2,
   PanelRightClose,
   PanelRightOpen,
   RotateCw,
   Pencil,
   Plus,
-  Search,
-  Settings2,
   TerminalSquare,
   Trash2,
   X,
   Zap,
 } from "lucide-react";
-import type {
-  LaunchRequest,
-  Preset,
-  Snapshot,
-  TerminalView,
-} from "../shared/types";
+import type { LaunchRequest, Preset, Snapshot, TerminalView } from "../shared/types";
 import { FilePanel } from "./FilePanel";
 import { TerminalTabs } from "./TerminalTabs";
 import { LaunchDialog } from "./LaunchDialog";
 import { useWorkspace } from "./useWorkspace";
+import { useGlobalShortcuts } from "./useGlobalShortcuts";
+import { KeyboardCheatsheet } from "./KeyboardCheatsheet";
+import { CommandPalette, type PaletteAction } from "./CommandPalette";
+import type { PaletteCommand } from "./command-logic";
 const Terminal = lazy(() =>
   import("./Terminal").then((module) => ({ default: module.Terminal })),
 );
-import { Field, Modal } from "./components";
-type Dialog =
-  | "create"
-  | "rename"
-  | "delete"
-  | "launch"
-  | "terminal-name"
-  | "presets"
-  | "help";
+import { SessionSidebar } from "./SessionSidebar";
+import { WorkspaceDialog, type Dialog } from "./WorkspaceDialog";
+import { ManagedReview } from "./ManagedReview";
+import { AttentionInbox } from "./AttentionInbox";
+import { isAdvancedEnabled } from "./AdvancedControls";
 export function App() {
   const [sessionId, setSessionId] = useState(
     localStorage.getItem("minimal.session") || "",
@@ -73,6 +59,38 @@ export function App() {
   const [explorerVisible, setExplorerVisible] = useState(
     localStorage.getItem("minimal.explorer") !== "hidden",
   );
+  // M3c.1 — read-only managed review shell toggle. Mirrors the explorer
+  // visibility toggle: persistent across reloads, off by default. When on,
+  // the SessionSidebar is replaced by ManagedReview (the existing M2
+  // session surface is restored by toggling off).
+  const [managedMode, setManagedMode] = useState(
+    localStorage.getItem("minimal.managed") === "on",
+  );
+  // M3c.3 — persistent attention inbox panel. Visibility is local state
+  // (no auto-open on background activity; background never steals focus).
+  const [inboxOpen, setInboxOpen] = useState(false);
+  // M9.3 — M5.6's command-palette and the new keyboard cheatsheet dialogs.
+  // We piggy-back on the existing `dialog` slot (Dialog union) so the
+  // open/close + focus restoration stay in one place. `cheatsheet` and
+  // `palette` are NOT routed through WorkspaceDialog — they render their
+  // own components below.
+  const [recentCommandIds, setRecentCommandIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("minimal.recent-commands");
+      if (!raw) return [];
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+  const pushRecent = useCallback((id: string) => {
+    setRecentCommandIds((prev) => {
+      const next = [id, ...prev.filter((value) => value !== id)].slice(0, 5);
+      localStorage.setItem("minimal.recent-commands", JSON.stringify(next));
+      return next;
+    });
+  }, []);
   const [launchInitial, setLaunchInitial] = useState<LaunchRequest>({
     command: "",
   });
@@ -83,8 +101,8 @@ export function App() {
   useEffect(() => {
     localStorage.setItem("minimal.terminals", JSON.stringify(terminalIds));
   }, [terminalIds]);
-  const [query, setQuery] = useState("");
   const [error, setError] = useState("");
+  const [version, setVersion] = useState("");
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<Dialog>();
   const [directory, setDirectory] = useState("");
@@ -99,7 +117,12 @@ export function App() {
       ),
     [],
   );
-  const { snapshot, ready, accept } = useWorkspace(report);
+  useEffect(() => {
+    let active = true;
+    void window.minimal.getAppInfo().then(info => { if (active) setVersion(info.appVersion); }).catch(report);
+    return () => { active = false; };
+  }, [report]);
+  const { snapshot, ready, accept, refresh } = useWorkspace(report);
   // Surface a recovery notice (e.g. malformed state.json) from the main
   // process through the same toast channel IPC errors use.
   useEffect(() => {
@@ -191,6 +214,20 @@ export function App() {
       }
     }
   };
+  const stopRuntime = useCallback(async () => {
+    // M1.6: explicit, user-initiated. The OS lock keeps the runtime alive across
+    // window closes, so this is the only way to actually terminate durable work.
+    // Confirmation is in-renderer to keep the desktop surface focused on chrome.
+    const accepted = window.confirm(
+      "Stop the runtime? All running terminals in this workspace will end and unsaved work will be lost. This cannot be undone.",
+    );
+    if (!accepted) return;
+    try {
+      await window.minimal.stopRuntime();
+    } catch (error) {
+      report(error);
+    }
+  }, [report]);
   const editAndRun = (item: TerminalView) => {
     if (!session) return;
     const candidate = item.currentDirectory || item.cwd;
@@ -204,6 +241,117 @@ export function App() {
     setError("");
     setDialog("launch");
   };
+  // M9.3 — palette command table. Kept as a memo so the renderer doesn't
+  // re-allocate the command list on every keystroke. `run` callbacks read
+  // the latest state via the closure; the hook rebuilds when session/mode
+  // change.
+  const paletteCommands = useMemo<readonly PaletteAction[]>(() => {
+    const list: PaletteAction[] = [
+      {
+        command: { id: "session.new", label: "New session", aliases: ["create"], scope: "global" },
+        run: () => openDialog("create"),
+      },
+      {
+        command: { id: "session.rename", label: "Rename session", scope: "session" },
+        run: () => openDialog("rename"),
+      },
+      {
+        command: { id: "session.delete", label: "Delete session", scope: "session" },
+        run: () => openDialog("delete"),
+      },
+      {
+        command: { id: "terminal.launch", label: "Launch terminals", scope: "session" },
+        run: () => openDialog("launch"),
+      },
+      {
+        command: { id: "terminal.rename", label: "Rename terminal", scope: "terminal" },
+        run: () => openDialog("terminal-name"),
+      },
+      {
+        command: { id: "presets.edit", label: "Edit launch presets", scope: "global" },
+        run: () => openDialog("presets"),
+      },
+      {
+        command: { id: "help.show", label: "How it works", scope: "global" },
+        run: () => openDialog("help"),
+      },
+      {
+        command: { id: "cheatsheet.show", label: "Keyboard shortcuts", scope: "global" },
+        run: () => setDialog("cheatsheet"),
+      },
+      {
+        command: { id: "managed.toggle", label: "Toggle managed review", scope: "session" },
+        run: () => setManagedMode((value) => {
+          const next = !value;
+          localStorage.setItem("minimal.managed", next ? "on" : "off");
+          return next;
+        }),
+      },
+      {
+        command: { id: "explorer.toggle", label: "Toggle file explorer", scope: "session" },
+        run: () => setExplorerVisible((value) => {
+          localStorage.setItem("minimal.explorer", value ? "hidden" : "visible");
+          return !value;
+        }),
+      },
+      {
+        command: { id: "inbox.toggle", label: "Open attention inbox", scope: "session" },
+        run: () => setInboxOpen((value) => !value),
+      },
+      {
+        command: { id: "stop.runtime", label: "Stop the runtime", scope: "global" },
+        run: () => void stopRuntime(),
+      },
+    ];
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, terminal?.id]);
+  const runPaletteCommand = useCallback((command: PaletteCommand) => {
+    const action = paletteCommands.find((a) => a.command.id === command.id);
+    if (!action) return;
+    pushRecent(command.id);
+    action.run();
+  }, [paletteCommands, pushRecent]);
+  // M9.3 — global hotkey wiring. `?` opens the cheatsheet; the others are
+  // wired to the existing dialog/sidebar state. Cycle-focus walks the
+  // three focusable chrome areas in the order: sidebar / managed review →
+  // terminal panel → inbox badge → back.
+  const focusableSelectors = [
+    ".sidebar .session-card",
+    ".managed-review .managed-list, .managed-review .managed-detail",
+    ".terminal-panel",
+    ".inbox-button",
+  ];
+  const cycleFocus = useCallback((direction: "up" | "down") => {
+    const all = focusableSelectors
+      .flatMap((sel) => Array.from(document.querySelectorAll<HTMLElement>(sel)))
+      .filter((el) => !el.hasAttribute("disabled") && el.tabIndex !== -1);
+    if (all.length === 0) return;
+    const current = document.activeElement as HTMLElement | null;
+    const index = current ? all.indexOf(current) : -1;
+    const next = direction === "down"
+      ? (index + 1) % all.length
+      : (index - 1 + all.length) % all.length;
+    all[next]?.focus();
+  }, []);
+  useGlobalShortcuts({
+    onPalette: () => setDialog((current) => (current === "palette" ? undefined : "palette")),
+    onSplitter: () => {
+      // M9.3 follow-up (commit 3): toggle is gated behind the advanced flag.
+      const advanced = localStorage.getItem("minimal.advanced") === "on";
+      if (!advanced) {
+        setError("Enable Advanced controls to toggle managed review.");
+        return;
+      }
+      setManagedMode((value) => {
+        const next = !value;
+        localStorage.setItem("minimal.managed", next ? "on" : "off");
+        return next;
+      });
+    },
+    onFocusCycle: cycleFocus,
+    onCheatsheet: () => setDialog((current) => (current === "cheatsheet" ? undefined : "cheatsheet")),
+  });
   const closeTerminal = async (targetSession: string, terminalId: string) => {
     if (closingRef.current.has(terminalId)) return;
     closingRef.current.add(terminalId);
@@ -236,111 +384,14 @@ export function App() {
       setClosing(new Set(closingRef.current));
     }
   };
-  const filtered = snapshot.sessions.filter((s) =>
-    `${s.name} ${s.directory}`.toLowerCase().includes(query.toLowerCase()),
-  );
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-icon">
-            <Command size={20} />
-          </span>
-          <span>
-            MINIMAL<span className="version">v1</span>
-          </span>
-        </div>
-        <div className="workspace-label">
-          YOUR WORKSPACE
-          <span className="dot live" />
-        </div>
-        <div className="session-section">
-          <span>Sessions</span>
-          <span className="count">{snapshot.sessions.length}</span>
-          <button
-            className="icon-button"
-            aria-label="Create session"
-            onClick={() => openDialog("create")}
-          >
-            <Plus size={16} />
-          </button>
-        </div>
-        <label className="search-box">
-          <Search size={14} />
-          <input
-            aria-label="Search sessions"
-            placeholder="Find a session…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <kbd>⌕</kbd>
-        </label>
-        <nav className="session-list" aria-label="Sessions">
-          {filtered.map((item) => (
-            <button
-              key={item.id}
-              className={`session-card ${session?.id === item.id ? "active" : ""}`}
-              onClick={() => selectSession(item.id)}
-            >
-              <span className="session-card-title">
-                <Folder size={16} />
-                <strong>{item.name}</strong>
-                <span
-                  className={`dot ${item.terminals.some((t) => t.status === "running") ? "live" : ""}`}
-                />
-              </span>
-              <span className="session-directory" title={item.directory}>
-                {item.directory}
-              </span>
-              <span className="session-meta">
-                <TerminalSquare size={12} />
-                {item.terminals.length} terminal
-                {item.terminals.length !== 1 ? "s" : ""}
-                <span>
-                  {snapshot.engineError
-                    ? "Status unavailable"
-                    : `${item.terminals.filter((t) => t.status === "running").length} running`}
-                </span>
-              </span>
-            </button>
-          ))}
-          {ready && filtered.length === 0 && (
-            <p className="sidebar-empty">
-              {query ? "No matching sessions." : "A fresh space for your work."}
-            </p>
-          )}
-        </nav>
-        <button className="new-session" onClick={() => openDialog("create")}>
-          <Plus size={16} />
-          New session
-        </button>
-        <div className="sidebar-bottom">
-          <div className="persistence-note">
-            <span className="persistence-icon">
-              <Layers2 size={18} />
-            </span>
-            <div>
-              <strong>Your work stays alive.</strong>
-              <p>Close the window. Pick up later.</p>
-            </div>
-          </div>
-          <button className="nav-button" onClick={() => openDialog("presets")}>
-            <Settings2 size={16} />
-            Launch presets
-            <ChevronRight size={14} />
-          </button>
-          <button className="nav-button" onClick={() => openDialog("help")}>
-            <CircleHelp size={16} />
-            How it works
-            <ArrowUpRight size={14} />
-          </button>
-        </div>
-        <div className="sidebar-status">
-          <span className={`dot ${snapshot.engineError ? "" : "live"}`} />
-          {snapshot.engineError ? "Connection issue" : "Local workspace"}
-          <span>FOUNDATION</span>
-        </div>
-      </aside>
+      {managedMode ? (
+        <ManagedReview managed={snapshot.managed} />
+      ) : (
+        <SessionSidebar snapshot={snapshot} selectedId={session?.id} ready={ready} version={version}
+          selectSession={selectSession} openDialog={openDialog} />
+      )}
       <main className="main">
         <header className="topbar">
           <div className="topbar-crumb">
@@ -349,10 +400,64 @@ export function App() {
             <ChevronRight size={13} />
             <strong>{session?.name || "Overview"}</strong>
           </div>
-          <span className="running-pill">
-            <span className={`dot ${snapshot.engineError ? "" : "live"}`} />
-            {snapshot.engineError ? "Status unavailable" : `${running} running`}
-          </span>
+          <div className="topbar-actions">
+            <span
+              className="running-pill"
+              // M9.3: the dot is colour-only; the explicit aria-label keeps the
+              // status legible when a screen reader announces the topbar.
+              aria-label={
+                snapshot.engineError
+                  ? "Runtime status unavailable"
+                  : `${running} terminal${running === 1 ? "" : "s"} running`
+              }
+              role="status"
+            >
+              <span className={`dot ${snapshot.engineError ? "" : "live"}`} />
+              {snapshot.engineError ? "Status unavailable" : `${running} running`}
+            </span>
+            {/* M3c.3 — persistent attention inbox badge. The button is
+                rendered whenever the projection has any open items;
+                clicking opens the slide-in panel. Background output never
+                calls `window.focus()` so the badge stays passive. */}
+            {snapshot.managed?.available === true && snapshot.managed.openAttention.length > 0 ? (
+              <button
+                className={`icon-button inbox-button ${inboxOpen ? "active" : ""}`}
+                aria-label={`Open attention inbox (${snapshot.managed.openAttention.length} open)`}
+                aria-pressed={inboxOpen}
+                title="Open attention inbox"
+                onClick={() => setInboxOpen(value => !value)}
+              >
+                <Bell size={16} />
+                <span className="inbox-badge">
+                  {snapshot.managed.openAttention.length > 99
+                    ? "99+"
+                    : String(snapshot.managed.openAttention.length)}
+                </span>
+              </button>
+            ) : null}
+            {/* M9.3 — keyboard cheatsheet. The `?` global hotkey opens the
+                same dialog, but a visible button keeps the affordance
+                discoverable without a keyboard. */}
+            <button
+              className="icon-button"
+              aria-label="Keyboard shortcuts"
+              aria-keyshortcuts="?"
+              title="Keyboard shortcuts (press ?)"
+              onClick={() => setDialog((current) => (current === "cheatsheet" ? undefined : "cheatsheet"))}
+            >
+              <HelpCircle size={17} />
+            </button>
+            {/* M1.6: closing the window keeps the runtime alive. This is the only
+                in-app affordance to actually terminate it. */}
+            <button
+              className="secondary stop-runtime"
+              onClick={stopRuntime}
+              disabled={!ready}
+              title="Stop the runtime and end this workspace"
+            >
+              Stop runtime
+            </button>
+          </div>
         </header>
         {error && (
           <div className="error-toast" role="alert">
@@ -399,6 +504,44 @@ export function App() {
                 </div>
               </div>
               <div className="session-actions">
+                <button
+                  className={`icon-button ${managedMode ? "active" : ""}`}
+                  aria-label={
+                    managedMode
+                      ? "Hide managed review"
+                      : isAdvancedEnabled()
+                        ? "Show managed review"
+                        : "Show managed review (Advanced)"
+                  }
+                  aria-pressed={managedMode}
+                  aria-describedby={isAdvancedEnabled() ? undefined : "managed-advanced-hint"}
+                  disabled={!isAdvancedEnabled() && !managedMode}
+                  title={
+                    managedMode
+                      ? "Switch back to the session sidebar"
+                      : isAdvancedEnabled()
+                        ? "Open the managed work review shell (M3c)"
+                        : "Enable Advanced controls to unlock Managed review"
+                  }
+                  onClick={() => {
+                    if (!isAdvancedEnabled() && !managedMode) {
+                      setError("Enable Advanced controls (Presets dialog \u2192 Advanced controls) to use Managed review.");
+                      return;
+                    }
+                    setManagedMode((value) => {
+                      const next = !value;
+                      localStorage.setItem("minimal.managed", next ? "on" : "off");
+                      return next;
+                    });
+                  }}
+                >
+                  <Layers2 size={17} />
+                  {!isAdvancedEnabled() && !managedMode ? (
+                    <span className="advanced-badge" aria-hidden="true">
+                      Adv
+                    </span>
+                  ) : null}
+                </button>
                 <button
                   className="icon-button"
                   aria-label={
@@ -586,11 +729,11 @@ export function App() {
             LOCAL FIRST<span className="footer-separator">/</span>BUILT FOR
             FOCUS
           </span>
-          <span>
+          <span aria-label={`Application version ${version}`}>
             {session
               ? `${session.terminals.length} terminals in this session`
               : "A quieter way to manage your work"}
-            <span className="footer-separator">·</span>MINIMAL 1.1
+            <span className="footer-separator">·</span>MINIMAL {version}
           </span>
         </footer>
       </main>
@@ -604,235 +747,37 @@ export function App() {
           launch={launch}
         />
       )}
-      {dialog && dialog !== "launch" && (
-        <Modal
-          title={
-            {
-              create: "Create a session",
-              rename: "Rename session",
-              delete: "Delete this session?",
-              "terminal-name": "Rename terminal",
-              presets: "Launch presets",
-              help: "A home for running work.",
-            }[dialog]
-          }
-          subtitle={
-            {
-              create: "Bind a project directory to a persistent workspace.",
-              rename: "Make this workspace easy to recognize.",
-              delete:
-                "All terminals in this session will be stopped. Project files will be kept.",
-              "terminal-name": "A label that tells you what is running.",
-              presets: "Your tools, your commands. Add any workflow you use.",
-              help: "A few things to help you feel at home.",
-            }[dialog]
-          }
-          close={() => setDialog(undefined)}
-          busy={busy}
-          error={error}
-        >
-          {dialog === "help" ? (
-            <div className="help-content">
-              <p>
-                <strong>Sessions organize a folder and its terminals.</strong>{" "}
-                Switch freely between projects. Running work continues in the
-                background.
-              </p>
-              <p>
-                <strong>Closing the window detaches the view.</strong> Processes
-                and terminal history live in a private tmux server. Reopening
-                reconnects to surviving work. A reboot or stopped WSL instance
-                ends those processes; missing terminals are shown without
-                rerunning commands.
-              </p>
-              <p>
-                <strong>Launch any command.</strong> Enter codex, claude,
-                opencode, pi, or any installed command. Leave it empty for a
-                Bash shell. Save commands as presets and launch up to 32
-                terminals at once.
-              </p>
-              <p>
-                <strong>Add and close terminals freely.</strong> Use + New
-                terminal at any time. Each tab’s × stops and removes just that
-                terminal. Edit &amp; run opens its command for another launch.
-                Reconnect restores a terminal connection without restarting its
-                process.
-              </p>
-              <p>
-                <strong>The explorer stays inside your session folder.</strong>{" "}
-                Double-click to open folders or text files. Select an item to
-                rename, move, or delete it. Symlinks and special files are
-                blocked. Terminal commands run with your normal user
-                permissions.
-              </p>
-              <p>
-                <strong>Terminal basics.</strong> Type normally, use Ctrl+C to
-                interrupt, and scroll with the mouse wheel. Ctrl+Shift+C /
-                Ctrl+Shift+V copy and paste; right-click copies a selection or
-                pastes.
-              </p>
-              <button className="primary" onClick={() => setDialog(undefined)}>
-                Got it
-                <Check size={15} />
-              </button>
-            </div>
-          ) : (
-            <form onSubmit={submit}>
-              {(dialog === "create" ||
-                dialog === "rename" ||
-                dialog === "terminal-name") && (
-                <Field label="Name">
-                  <input
-                    name="name"
-                    autoFocus
-                    required
-                    maxLength={80}
-                    placeholder={
-                      dialog === "create" ? "e.g. Studio website" : ""
-                    }
-                    defaultValue={
-                      dialog === "rename"
-                        ? session?.name
-                        : dialog === "terminal-name"
-                          ? terminal?.label
-                          : ""
-                    }
-                  />
-                </Field>
-              )}
-              {dialog === "create" && (
-                <Field
-                  label="Working directory"
-                  hint="Choose the folder this session can browse and manage."
-                >
-                  <div className="directory-input">
-                    <input
-                      required
-                      value={directory}
-                      onChange={(event) => setDirectory(event.target.value)}
-                      placeholder="/home/you/projects/my-project"
-                    />
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={async () => {
-                        try {
-                          const value = await window.minimal.chooseDirectory();
-                          if (value) setDirectory(value);
-                        } catch (error) {
-                          report(error);
-                        }
-                      }}
-                    >
-                      <FolderOpen size={16} />
-                      Browse
-                    </button>
-                  </div>
-                </Field>
-              )}
-              {dialog === "presets" && (
-                <div className="presets-editor">
-                  {draftPresets.map((preset, index) => (
-                    <div className="preset-row" key={preset.id}>
-                      <div className="preset-number">
-                        {String(index + 1).padStart(2, "0")}
-                      </div>
-                      <div>
-                        <input
-                          aria-label={`Preset ${index + 1} name`}
-                          required
-                          maxLength={70}
-                          value={preset.name}
-                          placeholder="Workflow name"
-                          onChange={(event) =>
-                            setDraftPresets((items) =>
-                              items.map((p) =>
-                                p.id === preset.id
-                                  ? { ...p, name: event.target.value }
-                                  : p,
-                              ),
-                            )
-                          }
-                        />
-                        <textarea
-                          aria-label={`Preset ${index + 1} command`}
-                          rows={2}
-                          maxLength={8192}
-                          value={preset.command}
-                          placeholder="Empty = interactive Bash shell"
-                          spellCheck={false}
-                          onChange={(event) =>
-                            setDraftPresets((items) =>
-                              items.map((p) =>
-                                p.id === preset.id
-                                  ? { ...p, command: event.target.value }
-                                  : p,
-                              ),
-                            )
-                          }
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        aria-label={`Remove ${preset.name} preset`}
-                        disabled={draftPresets.length === 1}
-                        onClick={() =>
-                          setDraftPresets((items) =>
-                            items.filter((p) => p.id !== preset.id),
-                          )
-                        }
-                      >
-                        <X size={15} />
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() =>
-                      setDraftPresets((items) => [
-                        ...items,
-                        { id: crypto.randomUUID(), name: "", command: "" },
-                      ])
-                    }
-                  >
-                    <Plus size={14} />
-                    Add preset
-                  </button>
-                  <p className="form-note">
-                    Commands run with Bash in the selected directory. Tools must
-                    be installed on this machine. Existing terminals keep their
-                    original command.
-                  </p>
-                </div>
-              )}
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setDialog(undefined)}
-                  disabled={busy}
-                >
-                  Cancel
-                </button>
-                <button
-                  className={dialog === "delete" ? "danger" : "primary"}
-                  disabled={busy}
-                >
-                  {busy
-                    ? "Working…"
-                    : dialog === "create"
-                      ? "Create session"
-                      : dialog === "delete"
-                        ? "Stop terminals & delete"
-                        : "Save changes"}
-                </button>
-              </div>
-            </form>
-          )}
-        </Modal>
+      {dialog && dialog !== "launch" && dialog !== "cheatsheet" && dialog !== "palette" && (
+        <WorkspaceDialog dialog={dialog} busy={busy} error={error} close={() => setDialog(undefined)}
+          submit={submit} sessionName={session?.name} terminalLabel={terminal?.label}
+          directory={directory} setDirectory={setDirectory} draftPresets={draftPresets}
+          setDraftPresets={setDraftPresets} report={report} />
       )}
+      {/* M9.3 — keyboard cheatsheet dialog. */}
+      {dialog === "cheatsheet" && (
+        <KeyboardCheatsheet close={() => setDialog(undefined)} />
+      )}
+      {/* M9.3 — command palette dialog. The matching algorithm is the
+          pure helper in `command-logic.ts` (M5.6). */}
+      {dialog === "palette" && (
+        <CommandPalette
+          commands={paletteCommands}
+          recentIds={recentCommandIds}
+          runCommand={runPaletteCommand}
+          close={() => setDialog(undefined)}
+          sessionFocused={Boolean(session)}
+          terminalFocused={Boolean(terminal)}
+        />
+      )}
+      {/* M3c.3 — slide-in attention inbox panel. Renders nothing when
+          closed OR when the projection is unavailable / empty. */}
+      {inboxOpen && snapshot.managed?.available === true && snapshot.managed.openAttention.length > 0 ? (
+        <AttentionInbox
+          items={snapshot.managed.openAttention}
+          onChanged={refresh}
+          onClose={() => setInboxOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
