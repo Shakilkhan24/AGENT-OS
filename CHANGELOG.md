@@ -2,6 +2,168 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.5] - 2026-09-22
+
+M9.4 diagnostics cut. Closes M9.4 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+
+### Highlights
+
+- **Telemetry is off by default.** `settings.telemetry` defaults to
+  `false` and ships dormant. No uploader exists. The renderer
+  Content-Security-Policy (`connect-src 'none'`) blocks any
+  future inadvertent destination. The
+  `tests/desktop/telemetry-csp.spec.ts` audit locks the policy at
+  the source.
+- **Operational logs use allowlisted fields + correlation IDs.**
+  The offline export pipeline runs the 22-key allowlist over every
+  record; anything outside the allowlist becomes `[REDACTED]` and
+  the count surfaces on the audit surface. Correlation IDs are
+  end-to-end and back-filled when missing.
+- **Two scrubbers, distinct roles.** `src/main/logging.ts:scrub`
+  stays cheap for hot-path observability;
+  `src/release/diagnostic-scrubber.ts:scrubRecord / scrubBundle`
+  is the offline allowlist+canary scrubber. Both are documented
+  in [`docs/diagnostics.md`](../docs/diagnostics.md).
+- **Retention floor.** `pending-decision`, `live-intent`, and
+  `recoverable-candidate` entries are NEVER removed by the
+  day-rollover purge or the event-journal hard cap. The
+  classification is sourced from
+  `classifySourceForRetention(source)`; the default for any
+  uncategorised source is `operational`.
+- **Canary tests for secrets/paths.** The end-to-end test plants
+  all six default canary tokens (SSH key, AWS key, GitHub token,
+  bearer token, home-directory path, 32-char hex) through a real
+  `Logger.write`, drains the NDJSON, runs `scrubBundle`, and
+  asserts `failedCanaries.length === 0`. The scrubber recurses
+  into nested objects so a leaked secret in `fields.hostId`
+  (or any other nested structure) is replaced, not just
+  detected.
+- **Scrubber limits disclosed honestly.** Free-form `message`
+  text is passed through; the canary pass catches leaks but does
+  not scrub free-form text. The hot-path scrubber doesn't
+  recognise home-directory paths, AWS access keys, SSH private
+  keys, GitHub/bearer tokens, hex secrets, or env-lines — the
+  M3a `redactSecrets` walker covers those at runtime. The
+  diagnostic scrubber never claims "all secrets removed"; it
+  claims "all canary tokens removed" with a count.
+
+### Added
+
+- `scripts/diagnostics-export.mts` — offline bundle CLI
+  (`npm run diagnostics:export`).
+- `docs/diagnostics.md` — telemetry default, scrubber roles,
+  retention floor, canary taxonomy, scrubber limits, export
+  how-to.
+- `tests/runtime/diagnostics-export.test.ts` (6 tests).
+- `tests/runtime/event-bus-retention.test.ts` (4 tests).
+- `tests/desktop/telemetry-csp.spec.ts` (2 tests).
+
+### Changed
+
+- `src/shared/settings.ts` + `src/runtime/db/effective-settings.ts`
+  — `telemetry: z.boolean().default(false)` added to the
+  settings schema and the `KNOWN_SETTING_KEYS` allowlist.
+- `src/main/logging.ts` — `LogEntry.retentionClass`,
+  `applyRetentionClasses()` test seam, `protectedDayCount()`,
+  day-rollover floor, `MAX_PROTECTED_FILE_BYTES` cap.
+- `src/main/event-bus.ts` — class-aware journal slice,
+  `protectedCount()` test seam.
+- `src/release/compatibility-check.ts` — exports
+  `classifySourceForRetention(source)`.
+- `src/release/diagnostic-scrubber.ts` — recursive canary
+  replacement, widened `extraAllowedFields` type.
+- `src/main/index.ts` — `probeCompatibility()` called at desktop
+  startup, result logged as a `diagnostics / compatibility-probe`
+  record; failures are caught and logged as warnings.
+- `docs/compatibility.md` — fixes the "probe runs at startup"
+  claim to match the now-true behaviour.
+- `package.json` — `diagnostics:export` script, version
+  bumped to `1.2.5`.
+
+## [1.2.4] - 2026-09-21
+
+M9.3 accessibility cut. Closes M9.3 in
+[`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+
+### Highlights
+
+- Keyboard-only workflows: `Ctrl+Shift+P` opens the command palette,
+  `Ctrl+Shift+S` toggles managed review (gated behind Advanced
+  controls), `Ctrl+Shift+ArrowUp/Down` cycles focus across panes,
+  `?` opens the keyboard cheatsheet. All four are wired through a new
+  `useGlobalShortcuts` hook and stay inert while a text input or an
+  attached xterm has focus (except `Ctrl+Shift+P`, which intentionally
+  fires globally).
+- Visible focus indicators: `:focus-visible` rules on
+  `input/select/textarea`, the managed-mode columns, the xterm host,
+  and the prompt + action inputs. The literal `outline` declaration
+  survives `forced-colors: active` (Windows High Contrast / forced
+  colours on Linux).
+- 200% zoom reflow: top-level layout tokens (`sidebar`, `topbar`,
+  `panel-heading`, `work-area`, `files-panel`, `app-footer`) are now
+  `rem`-rooted. The topbar and sidebar reflow at 200% instead of
+  clipping. Tested in `tests/desktop/zoom.spec.ts`.
+- Color-independent status: every `.attention-inbox-state-*` chip
+  carries a leading `+`/`−`/`●`/`○` glyph and the `.running-pill`
+  carries an `aria-label` plus `role="status"` so screen readers and
+  forced-colors shells see the same signal sighted users do.
+- Accessible xterm: the terminal surface is now `role="log"` +
+  `aria-live="polite"` + `aria-label="Terminal output for {label}"`.
+  A visually-hidden `<span aria-live="polite">` mirror announces
+  connect / disconnect / exit transitions. The custom
+  `Ctrl+Shift+C/V` keymap now only hijacks when there is an active
+  selection, so AT-driven paste works.
+- Linux/WSLg screen-reader bridge: `app.setAccessibilitySupportEnabled(true)`
+  is called in `src/main/index.ts`. Real NVDA/Orca qualification runs
+  are recorded in [`docs/screen-reader-qualification.md`](../docs/screen-reader-qualification.md).
+- Advanced controls gate: a `<details>` block in the presets dialog
+  toggles `localStorage("minimal.advanced")`. When off (default), the
+  managed-mode topbar toggle shows an `(Adv)` badge and refuses the
+  keystroke. Provider-profile and hook-activation surfaces are gated
+  through the same flag.
+
+### Added
+
+- `src/renderer/useGlobalShortcuts.ts`,
+  `KeyboardCheatsheet.tsx`, `cheatsheet-data.ts`,
+  `CommandPalette.tsx`, `VisuallyHidden.tsx`,
+  `AdvancedControls.tsx`.
+- `docs/screen-reader-qualification.md`.
+- `tests/desktop/a11y.spec.ts` (4 tests), `tests/desktop/zoom.spec.ts`
+  (2 tests), and three new tests in
+  `tests/desktop/foundation.spec.ts`.
+
+### Changed
+
+- `src/renderer/style.css` — `rem`-rooted layout, `:focus-visible`
+  rules, `prefers-reduced-motion` strip, `forced-colors` overrides,
+  `.visually-hidden` helper, cheatsheet + palette styles, advanced
+  controls styles.
+- `src/renderer/ManagedReview.module.css`,
+  `src/renderer/AttentionInbox.module.css` — focus + glyph additions.
+- `src/renderer/App.tsx` — global hotkey wiring, palette + cheatsheet
+  dialog renders, `?` button, `aria-label` on the running-pill and
+  footer, Advanced gate on managed-mode toggle.
+- `src/renderer/WorkspaceDialog.tsx` — `<AdvancedControls />` block
+  in the presets editor; `Dialog` union extended with `cheatsheet`
+  and `palette` (excluded from the prop type).
+- `src/renderer/Terminal.tsx` — `role="log"`, `aria-live`,
+  `aria-label`, visually-hidden status mirror, conditional
+  `@xterm/addon-screen-reader` import path, refactored keymap.
+- `src/main/index.ts` — `app.setAccessibilitySupportEnabled(true)`.
+- `docs/compatibility.md` — accessibility table covering keyboard,
+  focus, zoom, color, text/diff, and Linux/WSLg screen reader.
+
+### Test coverage
+
+- `npx tsc --noEmit` — 0 errors.
+- `npx tsx --test tests/runtime/m9-gate.test.ts tests/runtime/m6-gate.test.ts tests/runtime/m7-gate.test.ts tests/release/release-checksum.test.ts` — 29/29 still green.
+- `npm run build` — clean.
+- New Playwright specs (a11y + zoom) require an Electron runtime and
+  cannot run in this CI environment without `MINIMAL_ELECTRON_PATH`;
+  they execute in the desktop CI lane alongside `foundation.spec.ts`.
+
 ## [Unreleased]
 
 M1 runtime foundation, in progress.

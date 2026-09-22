@@ -71,8 +71,14 @@ missing binaries degrade visibly to `{version: null, featureCount: 0}`.
 
 The runtime exposes its compatibility probe at
 [`src/release/compatibility-check.ts`](../src/release/compatibility-check.ts).
-The probe runs at startup; its output is logged via the
-allowlisted-fields diagnostic scrubber (M9.4 territory).
+`probeCompatibility()` is called at desktop startup (after
+`configureLogging` and before `launchRuntime`) and the result is
+logged as a `diagnostics / compatibility-probe` record. A probe
+failure is caught and logged as a warning so startup never blocks
+on environment detection.
+
+The diagnostic scrubber and the offline export pipeline are
+documented in [`docs/diagnostics.md`](diagnostics.md) (M9.4).
 
 ## What this document is **not**
 
@@ -81,3 +87,18 @@ allowlisted-fields diagnostic scrubber (M9.4 territory).
 - An exhaustive compatibility list. Distributions outside this table may
   work; please open an issue with your `distro + version` if you would
   like the maintainers to expand the supported matrix.
+
+## Accessibility (M9.3)
+
+| Dimension | Status | Notes |
+|---|---|---|
+| Keyboard-only workflows | **Supported** | Tab / Shift+Tab cycle through dialogs; arrow keys move between terminal tabs (roving tabindex); `Ctrl+Shift+P` opens the command palette; `Ctrl+Shift+S` toggles managed review (gated behind Advanced controls); `Ctrl+Shift+ArrowUp/Down` cycles focus across panes; `?` opens the keyboard cheatsheet; `Escape` closes the active dialog with focus restored to the opener. |
+| Visible focus indicators | **Supported** | `:focus-visible` rules on `input/select/textarea`, the managed-mode columns, and the xterm host. The literal `outline` survives `forced-colors: active` (Windows High Contrast, forced-colors shells on Linux). |
+| 200% zoom reflow | **Supported** | Layout tokens are `rem`-rooted (`1rem = 13px`; at 200% electron zoom `1rem ≈ 26px`). The topbar/sidebar reflow instead of clipping; the file panel's labels truncate with ellipsis. Tested in `tests/desktop/zoom.spec.ts`. |
+| Color-independent status | **Supported** | Status dots always pair with a text label; the `.attention-inbox-state-*` chips carry a leading `+`/`−`/`●`/`○` glyph. State never lives in colour alone. |
+| Accessible text and diffs | **Supported** | Diffs render as escaped text inside `<pre>` with a leading `+`/`-`/`@@` character; the terminal host is `role="log"` + `aria-live="polite"` + `aria-label="Terminal output for {label}"`; a visually-hidden status mirror announces connect / disconnect / exit transitions. |
+| Linux/WSLg screen-reader | **Supported** | `app.setAccessibilitySupportEnabled(true)` is called in `src/main/index.ts`, wiring up AT-SPI on Linux and the WSLg bridge. Real qualification runs are recorded in [`docs/screen-reader-qualification.md`](screen-reader-qualification.md) for Ubuntu+Orca and WSL2+NVDA. |
+
+The qualification doc is the only evidence for the screen-reader
+bullet — headless DOM tests assert the *attributes* a screen reader
+would consume but cannot reproduce reading behaviour.
