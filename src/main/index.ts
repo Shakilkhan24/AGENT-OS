@@ -17,6 +17,7 @@ import { ControlClient } from "../runtime/control-client";
 import { AppError } from "../shared/errors";
 import { API_VERSION, methods, parseSignal, parseResult, type Method, type RequestArgs, type Result, type InvocationContext } from "../shared/protocol";
 import { launchRuntime, resolveRuntimePaths, type RuntimeHandle } from "./runtime-launcher";
+import { probeCompatibility } from "../release/compatibility-check";
 
 if (process.env.MINIMAL_DATA_DIR)
   app.setPath("userData", path.resolve(process.env.MINIMAL_DATA_DIR));
@@ -41,12 +42,48 @@ else {
   app
     .whenReady()
     .then(async () => {
+      // M9.3: wire up the Linux/WSLg AT-SPI bridge so assistive technologies
+      // (Orca, NVDA via WSLg) can reach the renderer. No-op on platforms
+      // without an a11y bus. Kept before any BrowserWindow construction so
+      // the bridge is alive for the first render.
+      app.setAccessibilitySupportEnabled(true);
       const location = path.join(__dirname, "../renderer/index.html");
       const rendererUrl = pathToFileURL(location).href;
       const directory = app.getPath("userData");
       // The runtime owns its own logging (it sees workspace settings on open); the
       // desktop logger simply captures startup, IPC and shutdown lines.
       configureLogging(new Logger(path.join(directory, "logs")));
+      // M9.4: probe host compatibility at startup. The probe result
+      // is logged as an operational record so a reviewer can audit
+      // it post-hoc; a probe failure never blocks startup.
+      try {
+        const probe = await probeCompatibility();
+        log({
+          level: probe.supported ? "info" : "warning",
+          source: "diagnostics",
+          event: "compatibility-probe",
+          fields: {
+            architecture: probe.architecture,
+            runtime: probe.runtime,
+            filesystem: probe.filesystem,
+            distro: probe.distro,
+            providers: probe.providers,
+            sqliteAvailable: probe.sqliteAvailable,
+            rootlessContainerEngine: probe.rootlessContainerEngine,
+            supported: probe.supported,
+            unsupportedReasons: probe.unsupportedReasons,
+          },
+        });
+      } catch (error) {
+        log({
+          level: "warning",
+          source: "diagnostics",
+          event: "compatibility-probe-failed",
+          fields: {
+            kind: error instanceof Error ? error.name : "unknown",
+          },
+        });
+      }
       const helpersDir = path.join(__dirname, "../helpers");
       const paths = profilePaths(directory);
       const resolved = resolveRuntimePaths(helpersDir, path.join(__dirname, ".."));

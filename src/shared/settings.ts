@@ -33,6 +33,13 @@ export const settingsSchema = z
     workflowExecutorMaxFanout: workflowExecutorMaxFanoutSchema.default(DEFAULT_MAX_FANOUT),
     workflowExecutorDefaultStepTimeoutMs: workflowExecutorDefaultStepTimeoutMsSchema.default(DEFAULT_STEP_TIMEOUT_MS),
     workflowExecutorWaitPollMs: workflowExecutorWaitPollMsSchema.default(DEFAULT_WAIT_POLL_MS),
+    /**
+     * M9.4: telemetry is off by default. No uploader ships in this
+     * release — the flag exists so a future M-bullet can wire a
+     * destination without schema churn. The renderer CSP
+     * `connect-src 'none'` keeps the flag inert for now.
+     */
+    telemetry: z.boolean().default(false),
   })
   .strict();
 export type Settings = z.infer<typeof settingsSchema>;

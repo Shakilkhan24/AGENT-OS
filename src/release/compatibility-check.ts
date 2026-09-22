@@ -163,4 +163,34 @@ function defaultDetectRootlessContainer(): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// M9.4 — retention classification
+// ---------------------------------------------------------------------------
+
+import type { RetentionClass } from "./diagnostic-scrubber";
+
+/**
+ * Map a log source / event source to its `RetentionClass`. Anything
+ * not on the list defaults to `operational`. Conservative by design —
+ * only the three protected classes surface here, and only for sources
+ * whose meaning matches the M9.4 contract:
+ *
+ *   - `runtime/dispatcher.decision`   → `pending-decision`
+ *   - `runtime/dispatcher.intent`     → `live-intent`
+ *   - `runtime/backup.candidate`      → `recoverable-candidate`
+ *
+ * Adding a new mapping is a deliberate review-time decision; the
+ * diagnostics-export pipeline relies on this list to know which
+ * records are protected by the retention floor.
+ */
+const RETENTION_BY_SOURCE: ReadonlyMap<string, RetentionClass> = new Map([
+  ["runtime/dispatcher.decision", "pending-decision"],
+  ["runtime/dispatcher.intent", "live-intent"],
+  ["runtime/backup.candidate", "recoverable-candidate"],
+]);
+
+export function classifySourceForRetention(source: string): RetentionClass {
+  return RETENTION_BY_SOURCE.get(source) ?? "operational";
+}
+
 void z;

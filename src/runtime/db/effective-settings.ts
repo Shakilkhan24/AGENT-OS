@@ -310,6 +310,7 @@ const KNOWN_SETTING_KEYS = [
   "gracefulStopMs",
   "fileWatching",
   "shellMode",
+  "telemetry",
   "version",
 ] as const;
 
