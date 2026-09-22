@@ -109,19 +109,52 @@ const DEFAULT_CANARY_PATTERNS: ReadonlyArray<{ name: string; pattern: RegExp }> 
 // ---------------------------------------------------------------------------
 
 /**
+ * Recursively walk `value` and replace every occurrence of `token`
+ * with `[CANARY]`. Used by the canary pass so a leaked secret that
+ * landed in a nested structure is removed from the audit surface,
+ * not just detected. Strings are replaced via regex; objects and
+ * arrays are descended into. Other primitives pass through.
+ */
+function redactCanary(value: unknown, token: string, replacement: string): unknown {
+  if (typeof value === "string") {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return value.replace(new RegExp(escaped, "g"), replacement);
+  }
+  if (Array.isArray(value)) return value.map((item) => redactCanary(item, token, replacement));
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = redactCanary(v, token, replacement);
+    }
+    return result;
+  }
+  return value;
+}
+
+/**
  * Scrub a single diagnostic record. Returns the redacted fields +
  * a count of redacted keys + a list of dropped keys (unknown fields
  * outside the allowlist).
  *
  * The scrubber does NOT scrub free-form `message` text — callers
  * MUST move any sensitive content out of `message` before logging.
+ * The canary pass DOES recurse into nested objects so a leaked
+ * secret that landed in `fields.hostId` (or any other nested
+ * structure) is replaced with `[CANARY]`, not just detected.
  */
 export function scrubRecord(
   input: Record<string, unknown>,
   options: {
     retentionClass?: RetentionClass;
     canaries?: ReadonlyArray<{ name: string; value: string }>;
-    extraAllowedFields?: ReadonlyArray<AllowedField>;
+    /**
+     * Optional extra allowed field names (string). Used by callers
+     * that need to widen the allowlist beyond the 22 operational
+     * fields — the diagnostics export pipeline, for example, adds
+     * the Logger's nested keys (`at`, `source`, `event`,
+     * `retentionClass`) so the scrubber can read them.
+     */
+    extraAllowedFields?: ReadonlyArray<string>;
   } = {},
 ): ScrubResult {
   const retentionClass = options.retentionClass ?? "operational";
@@ -146,21 +179,22 @@ export function scrubRecord(
   let canaryMatches = 0;
   const canaryMisses: string[] = [];
   for (const canary of canaries) {
-    let found = false;
     const haystack = JSON.stringify(redacted);
     if (haystack.includes(canary.value)) {
       canaryMatches += 1;
-      found = true;
-      // Replace the canary value in-place so the output never carries the
-      // literal secret in the audit surface either.
-      const escaped = canary.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(escaped, "g");
-      for (const key of Object.keys(redacted)) {
-        const value = redacted[key];
-        if (typeof value === "string") redacted[key] = value.replace(re, "[CANARY]");
+      // Recursively replace the canary literal in the redacted
+      // payload (including nested objects and arrays). The previous
+      // implementation only walked top-level string fields, which
+      // left the literal in nested structures and undermined the
+      // "no universal redaction guarantee" disclosure.
+      const scrubbed = redactCanary(redacted, canary.value, "[CANARY]");
+      for (const k of Object.keys(redacted)) {
+        delete redacted[k];
       }
+      Object.assign(redacted, scrubbed as Record<string, unknown>);
+    } else {
+      canaryMisses.push(canary.name);
     }
-    if (!found) canaryMisses.push(canary.name);
   }
 
   return scrubResultSchema.parse({
@@ -198,7 +232,7 @@ export function scrubBundle(
   options: {
     canaries: ReadonlyArray<{ name: string; value: string }>;
     retentionClassesByIndex?: ReadonlyArray<RetentionClass>;
-    extraAllowedFields?: ReadonlyArray<AllowedField>;
+    extraAllowedFields?: ReadonlyArray<string>;
   },
 ): {
   records: ReadonlyArray<{ scrubbed: Record<string, unknown>; report: ScrubResult }>;
