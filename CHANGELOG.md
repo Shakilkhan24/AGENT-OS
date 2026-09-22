@@ -2,6 +2,145 @@
 
 All notable changes to MINIMAL are recorded here. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.8] - 2026-09-22
+
+M9.3 accessibility code delivery. Closes the code-side half of M9.3
+in [`FUTURE/IMPLEMENTATION-README.md`](../FUTURE/IMPLEMENTATION-README.md).
+The supported prefix of user-facing features is unchanged from 1.2.7;
+this cut lands the keyboard-first workflows, advanced-controls gate,
+and the headless DOM contract that supplements the manual
+screen-reader qualification.
+
+### Highlights
+
+- **Command palette.**
+  [`src/renderer/CommandPalette.tsx`](../src/renderer/CommandPalette.tsx)
+  + `Ctrl+Shift+P` global hotkey. The matching algorithm is the pure
+  helper in `src/renderer/command-logic.ts`; recent commands are
+  stored under `localStorage("minimal.recent-commands")` (max 5).
+  The palette's `<input>` carries `autoFocus`, `aria-controls`, and
+  `aria-activedescendant`; the result `<ul>` is a `role="listbox"`
+  with `role="option"` rows. Result limit 12; arrow keys move the
+  highlight; Enter activates; recent commands appear above results
+  when the query is empty.
+- **Keyboard cheatsheet.**
+  [`src/renderer/KeyboardCheatsheet.tsx`](../src/renderer/KeyboardCheatsheet.tsx)
+  + `?` global hotkey + a visible icon button on the topbar
+  (`aria-keyshortcuts="?"`). Ten rows of hotkeys live in
+  [`src/renderer/cheatsheet-data.ts`](../src/renderer/cheatsheet-data.ts)
+  so a test can assert the table contents without rendering the
+  dialog.
+- **Global hotkeys.**
+  [`src/renderer/useGlobalShortcuts.ts`](../src/renderer/useGlobalShortcuts.ts)
+  wires the four M5.6-deferred hotkeys. `Ctrl+Shift+P` is global
+  (the palette *is* a text input, and a user inside a terminal can
+  summon it without first clicking out). `Ctrl+Shift+S` (managed
+  toggle), `Ctrl+Shift+↑/↓` (focus cycle), and `?` (cheatsheet)
+  bail inside text inputs and inside an attached xterm surface.
+- **Focus cycle.** `Ctrl+Shift+↑/↓` walks
+  `.sidebar .session-card → .managed-review → .terminal-panel →
+  .inbox-button → back`, skipping disabled and
+  `tabindex="-1"` elements.
+- **Advanced controls gate.** New
+  [`src/renderer/AdvancedControls.tsx`](../src/renderer/AdvancedControls.tsx)
+  component lives inside the Presets dialog as a `<details>`. Default
+  is off; flipping it on persists under
+  `localStorage("minimal.advanced")` and unlocks the managed-mode
+  topbar toggle + the cheatsheet palette actions. When off, the
+  managed toggle is disabled, has an "Adv" badge, and a tool-tip
+  pointing the user to the gate.
+- **Terminal host a11y contract.**
+  [`src/renderer/Terminal.tsx`](../src/renderer/Terminal.tsx) now
+  ships `role="log"`, `aria-live="polite"`, and an
+  `aria-label="Terminal output for {label}"` on the
+  `.terminal-surface` host. A visually-hidden
+  `[data-testid="terminal-status"]` span mirrors the connection
+  state and announces connect/disconnect/exit transitions to AT.
+  The `Ctrl+Shift+C/V` hijack is now
+  `if (!term.hasSelection()) return true;` — AT-driven copy/paste
+  is no longer swallowed when there is no terminal selection.
+- **Visible focus.**
+  [`src/renderer/style.css`](../src/renderer/style.css) introduces a
+  `--focus-ring` token + a `:focus-visible` block (covering
+  `input`, `select`, `textarea`, `button`, and `a`) + a
+  `.terminal-surface:focus-within` rule (xterm.js suppresses
+  outlines on its descendants). The double
+  `outline + box-shadow` rule survives
+  `forced-colors: active`. A `@media (prefers-reduced-motion: reduce)`
+  block strips transitions for motion-sensitive users.
+- **200% zoom reflow.** Pixel widths in the chrome have been
+  converted to `rem` units (sidebar 20rem, topbar 4.5rem, session
+  header padding in rem) so the layout reflows correctly at 200%
+  zoom. The contract is asserted by
+  [`tests/desktop/zoom.spec.ts`](../tests/desktop/zoom.spec.ts)
+  (topbar must not clip horizontally; body must not overflow the
+  viewport width).
+- **Color-independent status.** The running-pill is no longer
+  colour-only: it carries an `aria-label` (e.g. "2 terminals
+  running" or "Runtime status unavailable") and
+  `role="status"`. The dot has a sibling text node, so AT still
+  announces the value. The application-version `<span>` in the
+  footer now carries an `aria-label` so screen readers announce
+  the version once rather than reading the literal characters.
+- **Screen-reader qualification.**
+  [`docs/screen-reader-qualification.md`](../docs/screen-reader-qualification.md)
+  records the M9.3 manual run matrix (Ubuntu 22.04 + Orca 46+,
+  WSL2 + WSLg + NVDA 2024.x — five smoke flows, three independent
+  days on different keyboard layouts). The M9.3 bullet is
+  "qualified" only when all five flows pass on both configurations
+  across all three runs.
+- **Headless DOM contract.** Three new tests in
+  [`tests/desktop/foundation.spec.ts`](../tests/desktop/foundation.spec.ts)
+  + [`tests/desktop/a11y.spec.ts`](../tests/desktop/a11y.spec.ts)
+  assert: terminal host `role`/`aria-live`/`aria-label`, running-pill
+  `aria-label`, the four global hotkeys open their dialogs, the
+  palette's `<input>` receives focus, the cheatsheet lists the four
+  M9.3 hotkeys, and `Ctrl+Shift+P` does NOT fire while focus is
+  inside an attached xterm.
+
+### File surface
+
+- `src/renderer/AdvancedControls.tsx` — Advanced controls gate.
+- `src/renderer/CommandPalette.tsx` — palette dialog.
+- `src/renderer/KeyboardCheatsheet.tsx` — cheatsheet dialog.
+- `src/renderer/VisuallyHidden.tsx` — visually-hidden helper.
+- `src/renderer/cheatsheet-data.ts` — cheatsheet table contents.
+- `src/renderer/useGlobalShortcuts.ts` — global hotkey wiring.
+- `src/renderer/Terminal.tsx` — terminal host a11y contract.
+- `src/renderer/WorkspaceDialog.tsx` — `Dialog` union extension +
+  Advanced controls gate rendering.
+- `src/renderer/App.tsx` — palette + cheatsheet + hotkey wiring +
+  recent commands + focus cycle + running-pill `aria-label` +
+  advanced-badge.
+- `src/renderer/style.css` — `--focus-ring` token, `:focus-visible`
+  block, `forced-colors` + `prefers-reduced-motion` fallbacks,
+  rem-unit reflow, palette / cheatsheet / advanced-badge styles.
+- `src/renderer/AttentionInbox.module.css` + `ManagedReview.module.css` —
+  reflow tuning.
+- `docs/screen-reader-qualification.md` — manual run matrix.
+- `tests/desktop/foundation.spec.ts` — 3 new a11y tests.
+- `tests/desktop/a11y.spec.ts` — keyboard + palette + cheatsheet flows.
+- `tests/desktop/zoom.spec.ts` — 200% zoom reflow contract.
+
+### M9.6 preserved
+
+- Five boundary docs (`distribution`, `security`, `provider-economics`,
+  `commercial-decision`, `cancel-and-walk-away`) are unchanged.
+- 14/14 M9.6 doc-freshness tests still pass.
+
+### M9.5 preserved
+
+- Pilot harness + refuse-to-spend gate is unchanged.
+- Williams 3×6 counterbalance + 20-fixture skeleton bank is unchanged.
+- `pilotReport.caveats[]` literal honest-limit lines are unchanged.
+
+### M9.4 preserved
+
+- `settings.telemetry: false` default is unchanged.
+- `connect-src 'none'` CSP audit still passes.
+- `classifySourceForRetention()` retention floor still holds.
+- `diagnostics:export` canary pipeline still catches planted tokens.
+
 ## [1.2.7] - 2026-09-22
 
 M9.6 boundary-pinning docs. Closes M9.6 in
