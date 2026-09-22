@@ -161,3 +161,45 @@ test("Run durable button enables only after the M9.3 advanced-controls gate is o
     await expect(dialog.getByTestId("workflow-result")).toBeVisible({ timeout: 8000 });
   } finally { await ctx.close(); }
 });
+
+test("Run durable renders the live M6.4 progress strip after the executor converges", async () => {
+  // The M6.4 progress strip is the visible seam for the new
+  // `get-workflow-run` IPC. With the Advanced gate on, the
+  // WorkflowRunner polls `window.minimal.getWorkflowRun(...)` on a
+  // fixed cadence after a successful **Run durable**. For a
+  // small `command-only` graph the durable executor finalizes
+  // within ~250 ms, so the strip freezes on `state:"completed"`
+  // for both steps within the assertion window.
+  const ctx = await fixture();
+  try {
+    const { page } = ctx;
+    await page.addInitScript(() => {
+      localStorage.setItem("minimal.advanced", "on");
+    });
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "WorkflowRunner", exact: true })).toBeVisible();
+    await page.locator("body").click();
+    await page.keyboard.press("Control+Shift+P");
+    await page.getByRole("dialog", { name: "Command palette" })
+      .getByRole("textbox", { name: "Search" })
+      .fill("workflow");
+    await page.getByRole("dialog", { name: "Command palette" })
+      .getByRole("option", { name: /Run inline workflow/ })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "Workflow runner" });
+    // Pick the `command-only` fixture (two command steps). The
+    // hello-world graph also works; command-only verifies both
+    // step IDs render in the strip.
+    await dialog.getByRole("combobox", { name: "Workflow fixture" })
+      .selectOption("command-only");
+    await dialog.getByTestId("workflow-run-durable").click();
+    // The result envelope renders first; the progress strip
+    // follows on the next poll tick.
+    await expect(dialog.getByTestId("workflow-result")).toBeVisible({ timeout: 8000 });
+    await expect(dialog.getByTestId("workflow-progress")).toBeVisible({ timeout: 4000 });
+    // Both step IDs from the command-only graph appear as list
+    // items in the strip.
+    await expect(dialog.getByTestId("workflow-progress")).toContainText("step-true");
+    await expect(dialog.getByTestId("workflow-progress")).toContainText("step-false");
+  } finally { await ctx.close(); }
+});

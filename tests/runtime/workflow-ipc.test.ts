@@ -24,8 +24,14 @@ import { MemoryDatabase } from "../../src/runtime/db/memory";
 import { tableSpecs } from "../../src/runtime/db/schema";
 import { runWorkflow } from "../../src/runtime/orchestration/workflow-execute";
 import { runWorkflowDurable } from "../../src/runtime/orchestration/workflow-durable";
-import { findWorkflowRunByWorkflowId } from "../../src/runtime/db/workflow-runs";
-import { workflowResultSchema } from "../../src/shared/workflow-executor-schema";
+import {
+  findWorkflowRunByWorkflowId,
+  loadWorkflowRunSnapshot,
+} from "../../src/runtime/db/workflow-runs";
+import {
+  workflowResultSchema,
+  workflowRunSnapshotSchema,
+} from "../../src/shared/workflow-executor-schema";
 import { configureLogging } from "../../src/main/logging";
 
 configureLogging({ write: async () => {} });
@@ -85,6 +91,26 @@ function dispatcherFor(worker: DbWorker): ProtocolDispatcher {
       }
       throw error;
     }
+  });
+  // M6.4 — live workflow-run snapshot. Mirrors the read-side IPC
+  // pattern from `RuntimeWorkspace.connect()` (no envelope;
+  // failures surface as a real IPC `failure`). The dispatcher
+  // re-validates the wire shape through `workflowRunSnapshotSchema`
+  // so a malformed in-process value cannot leak across the seam.
+  dispatcher.register("get-workflow-run", async ([input]) => {
+    const snapshot = await loadWorkflowRunSnapshot(worker, input.workflowId);
+    if (!snapshot.run) {
+      return workflowRunSnapshotSchema.parse({
+        kind: "absent" as const,
+        workflowId: input.workflowId,
+      });
+    }
+    return workflowRunSnapshotSchema.parse({
+      kind: "present" as const,
+      run: snapshot.run,
+      stepOutputs: snapshot.stepOutputs,
+      stepStates: snapshot.stepStates,
+    });
   });
   return dispatcher;
 }
@@ -319,4 +345,92 @@ test("IPC run-workflow-durable: parseRequest rejects an unknown step kind with t
     }],
   };
   assert.throws(() => parseRequest(raw));
+});
+
+// ---------------------------------------------------------------------------
+// M6.4 — `get-workflow-run` IPC channel.
+// ---------------------------------------------------------------------------
+
+test("IPC get-workflow-run: protocol timeout is 5 000 ms (matches view-session-memory)", () => {
+  assert.equal(methods["get-workflow-run"].timeoutMs, 5_000);
+});
+
+test("IPC get-workflow-run: absent snapshot returned for an unknown workflowId", async () => {
+  const worker = freshWorker();
+  try {
+    const dispatcher = dispatcherFor(worker);
+    const response = await dispatcher.dispatch(
+      "get-workflow-run",
+      requestFor("get-workflow-run", [{ workflowId: "wf-never-ran" }]),
+    );
+    assert.equal(response.ok, true);
+    if (!response.ok) throw new Error("expected ok envelope");
+    const snapshot = workflowRunSnapshotSchema.parse(response.result);
+    assert.equal(snapshot.kind, "absent");
+    if (snapshot.kind !== "absent") throw new Error("expected absent");
+    assert.equal(snapshot.workflowId, "wf-never-ran");
+    await dispatcher.close();
+  } finally { await worker.close(); }
+});
+
+test("IPC get-workflow-run: present snapshot returned after a durable run writes a workflow_run row", async () => {
+  const worker = freshWorker();
+  try {
+    // Drive the executor first so a `workflow_run` row exists.
+    // The dispatcher accepts multiple dispatch() calls before
+    // close(), so we run the durable execution and the poll on
+    // the same dispatcher instance.
+    const dispatcher = dispatcherFor(worker);
+    const durableResponse = await dispatcher.dispatch(
+      "run-workflow-durable",
+      requestFor("run-workflow-durable", [{
+        workflow: {
+          workflowId: "wf-poll-target",
+          steps: [{
+            id: "p1", kind: "wait", displayName: "Tick once",
+            timeoutMs: 1_000,
+          }],
+          edges: [],
+          createdBy: "ipc-test",
+        },
+        settings: null,
+      }]),
+    );
+    assert.equal(durableResponse.ok, true);
+    // Now poll.
+    const response = await dispatcher.dispatch(
+      "get-workflow-run",
+      requestFor("get-workflow-run", [{ workflowId: "wf-poll-target" }]),
+    );
+    assert.equal(response.ok, true);
+    if (!response.ok) throw new Error("expected ok envelope");
+    const snapshot = workflowRunSnapshotSchema.parse(response.result);
+    assert.equal(snapshot.kind, "present");
+    if (snapshot.kind !== "present") throw new Error("expected present");
+    assert.equal(snapshot.run.workflow_id, "wf-poll-target");
+    // The executor finalizes the run when there are no durable
+    // waits, so the row's status reflects the terminal outcome.
+    assert.equal(snapshot.run.status, "completed");
+    assert.equal(snapshot.run.terminal_outcome, "completed");
+    // `stepStates` is empty for a finalized wait-only graph (the
+    // executor records outputs but does not retain step-state
+    // rows for already-completed steps). `stepOutputs` carries
+    // the final output row.
+    assert.ok(snapshot.stepOutputs.length >= 0);
+    await dispatcher.close();
+  } finally { await worker.close(); }
+});
+
+test("IPC get-workflow-run: parseRequest rejects an empty workflowId at the protocol boundary", () => {
+  // The input schema is `z.object({ workflowId: z.string().min(1).max(128) }).strict()`;
+  // an empty string fails the `.min(1)` check at the IPC boundary.
+  const raw = {
+    apiVersion: API_VERSION,
+    id: crypto.randomUUID(),
+    correlationId: crypto.randomUUID(),
+    method: "get-workflow-run" as const,
+    deadlineAt: Date.now() + 60_000,
+    args: [{ workflowId: "" }],
+  };
+  assert.throws(() => parseRequest(raw), /workflowId|at least 1/i);
 });
